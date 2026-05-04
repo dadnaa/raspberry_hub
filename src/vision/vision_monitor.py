@@ -22,6 +22,15 @@ import logging
 import threading
 from typing import Optional
 
+from config.settings import (
+    VISION_CONFIDENCE_MIN,
+    VISION_COOLDOWN_SEC,
+    VISION_FAILURE_THRESHOLD,
+    VISION_INTERVAL_NORMAL_SEC,
+    VISION_INTERVAL_RISK_SEC,
+    VISION_INTERVAL_STABLE_SEC,
+    VISION_OK_STREAK_FOR_SLOW,
+)
 from src.vision.stream_reader          import StreamReader
 from src.vision.frame_sampler          import FrameSampler, DEFAULT_INTERVAL_SEC
 from src.vision.ai_client              import AIClient, AIInferenceResult
@@ -32,10 +41,10 @@ from src.jobs.job_model                import Job
 logger = logging.getLogger(__name__)
 
 # Adaptive interval adjustments
-_INTERVAL_RISK_SEC    = 1.5   # faster sampling after a detected failure
-_INTERVAL_NORMAL_SEC  = 3.0   # default
-_INTERVAL_STABLE_SEC  = 5.0   # slow down after long OK streak
-_OK_STREAK_FOR_SLOW   = 10    # consecutive OKs before relaxing interval
+_INTERVAL_RISK_SEC = VISION_INTERVAL_RISK_SEC
+_INTERVAL_NORMAL_SEC = VISION_INTERVAL_NORMAL_SEC
+_INTERVAL_STABLE_SEC = VISION_INTERVAL_STABLE_SEC
+_OK_STREAK_FOR_SLOW = VISION_OK_STREAK_FOR_SLOW
 
 
 class VisionMonitor:
@@ -69,9 +78,9 @@ class VisionMonitor:
 
         cfg = guard_config or {}
         self._guard = FailureGuard(
-            failure_threshold = cfg.get("failure_threshold", 3),
-            confidence_min    = cfg.get("confidence_min",    0.75),
-            cooldown_sec      = cfg.get("cooldown_sec",      30.0),
+            failure_threshold = cfg.get("failure_threshold", VISION_FAILURE_THRESHOLD),
+            confidence_min    = cfg.get("confidence_min",    VISION_CONFIDENCE_MIN),
+            cooldown_sec      = cfg.get("cooldown_sec",      VISION_COOLDOWN_SEC),
         )
 
         self._reader:  Optional[StreamReader]  = None

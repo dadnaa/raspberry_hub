@@ -31,10 +31,11 @@ from src.engine.validator import validate_command, validate_batch, ValidationErr
 from src.hardware.printer_communicator import PrinterCommunicator
 from src.hardware.serial_connection import SerialConnection
 from src.hardware.serial_router import SerialRouter
+from config.settings import COMMAND_RESULT_TIMEOUT_SEC
 logger = logging.getLogger(__name__)
 
 # How long send() blocks waiting for a result before timing out
-SEND_RESULT_TIMEOUT_SEC = 30.0
+SEND_RESULT_TIMEOUT_SEC = COMMAND_RESULT_TIMEOUT_SEC
 
 
 class CommandEngine:

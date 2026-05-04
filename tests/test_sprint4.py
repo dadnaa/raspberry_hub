@@ -53,15 +53,19 @@ class TestMQTTTopics(unittest.TestCase):
         subs = self.t.all_subscriptions
         self.assertIn(self.t.command,   subs)
         self.assertIn(self.t.start_job, subs)
-        self.assertEqual(len(subs), 2)
+        self.assertIn(self.t.pause_job,  subs)
+        self.assertIn(self.t.resume_job, subs)
+        self.assertIn(self.t.stop_job,   subs)
+        self.assertEqual(len(subs), 5)
 
     def test_no_extra_topics(self):
         """Ensure no undocumented topics exist on MQTTTopics."""
         topic_props = [
             self.t.handshake, self.t.printer_state, self.t.job_state,
             self.t.command_state, self.t.command, self.t.start_job,
+            self.t.pause_job, self.t.resume_job, self.t.stop_job,
         ]
-        self.assertEqual(len(topic_props), 6)
+        self.assertEqual(len(topic_props), 9)
 
 
 # ─────────────────────────────────────────────────────────────────────

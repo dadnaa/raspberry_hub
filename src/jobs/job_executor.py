@@ -14,13 +14,14 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from config.settings import JOB_PAUSE_POLL_INTERVAL_SEC
 from src.jobs.job_model  import Job
 from src.jobs.job_store  import JobStore
 from src.core.models     import JobStateMessage
 
 logger = logging.getLogger(__name__)
 
-_PAUSE_POLL_INTERVAL = 0.25
+_PAUSE_POLL_INTERVAL = JOB_PAUSE_POLL_INTERVAL_SEC
 
 
 def _utc_now() -> str:

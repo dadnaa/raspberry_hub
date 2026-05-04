@@ -20,17 +20,25 @@ from typing import Callable, Optional, Tuple
 import cv2
 import numpy as np
 
+from config.settings import (
+    VISION_DEFAULT_SAMPLE_INTERVAL_SEC,
+    VISION_JPEG_QUALITY,
+    VISION_MAX_SAMPLE_INTERVAL_SEC,
+    VISION_MIN_SAMPLE_INTERVAL_SEC,
+    VISION_TARGET_HEIGHT,
+    VISION_TARGET_WIDTH,
+)
 from src.vision.stream_reader import StreamReader
 
 logger = logging.getLogger(__name__)
 
 # Default sampling parameters
-DEFAULT_INTERVAL_SEC  = 3.0
-MIN_INTERVAL_SEC      = 1.0
-MAX_INTERVAL_SEC      = 10.0
-TARGET_WIDTH          = 640
-TARGET_HEIGHT         = 480
-JPEG_QUALITY          = 75   # 0-100; lower = smaller payload
+DEFAULT_INTERVAL_SEC = VISION_DEFAULT_SAMPLE_INTERVAL_SEC
+MIN_INTERVAL_SEC = VISION_MIN_SAMPLE_INTERVAL_SEC
+MAX_INTERVAL_SEC = VISION_MAX_SAMPLE_INTERVAL_SEC
+TARGET_WIDTH = VISION_TARGET_WIDTH
+TARGET_HEIGHT = VISION_TARGET_HEIGHT
+JPEG_QUALITY = VISION_JPEG_QUALITY
 
 
 def _utc_now() -> str:

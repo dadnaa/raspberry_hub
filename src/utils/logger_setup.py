@@ -10,10 +10,12 @@ import logging.handlers
 import os
 from datetime import datetime
 
-LOG_DIR        = os.path.join(os.path.dirname(__file__), "../../logs")
-LOG_LEVEL      = logging.DEBUG
-MAX_BYTES      = 5 * 1024 * 1024   # 5 MB per file
-BACKUP_COUNT   = 3
+from config.settings import (
+    LOG_BACKUP_COUNT,
+    LOG_DIR,
+    LOG_LEVEL,
+    LOG_MAX_BYTES,
+)
 
 
 def setup_logging(session_name: str = "session") -> logging.Logger:
@@ -31,7 +33,7 @@ def setup_logging(session_name: str = "session") -> logging.Logger:
     os.makedirs(LOG_DIR, exist_ok=True)
 
     timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file    = os.path.join(LOG_DIR, f"{session_name}_{timestamp}.log")
+    log_file    = os.path.join(str(LOG_DIR), f"{session_name}_{timestamp}.log")
 
     root_logger = logging.getLogger()
     root_logger.setLevel(LOG_LEVEL)
@@ -51,8 +53,8 @@ def setup_logging(session_name: str = "session") -> logging.Logger:
     # ── File handler ───────────────────────────────────────────────────
     file_handler = logging.handlers.RotatingFileHandler(
         filename=log_file,
-        maxBytes=MAX_BYTES,
-        backupCount=BACKUP_COUNT,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8",
     )
     file_handler.setLevel(logging.DEBUG)

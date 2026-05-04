@@ -28,12 +28,18 @@ import urllib.error
 from dataclasses import dataclass
 from typing import Optional
 
+from config.settings import (
+    VISION_AI_ENDPOINT_ENV,
+    VISION_AI_TIMEOUT_SEC,
+    VISION_DEFAULT_AI_ENDPOINT,
+)
+
 logger = logging.getLogger(__name__)
 
 # Environment variable for endpoint URL
-_AI_ENDPOINT_ENV  = "VISION_AI_ENDPOINT"
-_DEFAULT_ENDPOINT = "http://localhost:8090/infer"
-_TIMEOUT_SEC      = 8.0
+_AI_ENDPOINT_ENV = VISION_AI_ENDPOINT_ENV
+_DEFAULT_ENDPOINT = VISION_DEFAULT_AI_ENDPOINT
+_TIMEOUT_SEC = VISION_AI_TIMEOUT_SEC
 
 Classification = str   # "OK" | "FAILURE" | "UNCERTAIN"
 

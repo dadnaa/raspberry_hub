@@ -58,10 +58,21 @@ class JobManager:
         self._queue:    Deque[Job]               = deque()
         self._active:   Optional[Job]            = None
         self._executor: Optional[JobExecutor]    = None
+        self._state_listener: Optional[Callable[[Job], None]] = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def set_state_listener(self, callback: Optional[Callable[[Job], None]]) -> None:
+        """
+        Register a callback invoked by JobExecutor on job state changes.
+
+        Used by Sprint 6 VisionController to activate/deactivate monitoring
+        without polling.
+        """
+        with self._lock:
+            self._state_listener = callback
 
     def submit(self, msg: StartJobMessage) -> Job:
         """
@@ -219,6 +230,7 @@ class JobManager:
             publish_state=self._publish,
             printer_id=self._printer_id,
             on_finished=self._on_job_finished,
+            state_listener=self._state_listener,
         )
         self._executor.start()
         logger.info(f"[JobManager] Execution started: {job.job_id}")

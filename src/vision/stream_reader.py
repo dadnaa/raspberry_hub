@@ -20,10 +20,16 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from config.settings import (
+    VISION_FRAME_WAIT_TIMEOUT_SEC,
+    VISION_STREAM_READ_TIMEOUT_SEC,
+    VISION_STREAM_RECONNECT_DELAY_SEC,
+)
+
 logger = logging.getLogger(__name__)
 
-_RECONNECT_DELAY_SEC = 3.0
-_READ_TIMEOUT_SEC    = 5.0    # seconds before we declare stream dead
+_RECONNECT_DELAY_SEC = VISION_STREAM_RECONNECT_DELAY_SEC
+_READ_TIMEOUT_SEC = VISION_STREAM_READ_TIMEOUT_SEC
 
 
 class StreamReader:
@@ -78,7 +84,7 @@ class StreamReader:
     def is_connected(self) -> bool:
         return self._connected_event.is_set()
 
-    def wait_for_frame(self, timeout: float = 10.0) -> bool:
+    def wait_for_frame(self, timeout: float = VISION_FRAME_WAIT_TIMEOUT_SEC) -> bool:
         """Block until first frame arrives or timeout. Returns True if frame ready."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

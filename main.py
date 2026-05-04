@@ -28,6 +28,18 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from config.settings import (
+    MQTT_DEFAULT_PRINTER_ID,
+    MQTT_PRINTER_ID_ENV,
+    PRINTER_MODEL,
+    PRINTER_NAME,
+    PRINTER_NOZZLE_DIAMETER,
+    VISION_CAMERA_URL_ENV,
+    VISION_CONFIDENCE_MIN,
+    VISION_COOLDOWN_SEC,
+    VISION_DEFAULT_CAMERA_URL,
+    VISION_FAILURE_THRESHOLD,
+)
 from src.utils.logger_setup          import setup_logging
 from src.hardware.serial_connection   import SerialConnection, SerialConnectionError
 from src.hardware.serial_router       import SerialRouter
@@ -43,9 +55,9 @@ setup_logging(session_name="rasp-arch")
 logger = logging.getLogger(__name__)
 
 PRINTER_CONFIG = PrinterConfig(
-    name="Creality Ender-3",
-    model="Ender-3",
-    nozzle_diameter=0.4,
+    name=PRINTER_NAME,
+    model=PRINTER_MODEL,
+    nozzle_diameter=PRINTER_NOZZLE_DIAMETER,
 )
 
 
@@ -54,8 +66,8 @@ def main():
     logger.info("  Reactive Edge Hub — Full Stack (Sprints 1-6)")
     logger.info("=" * 60)
 
-    camera_url = os.environ.get("VISION_CAMERA_URL", "rtsp://192.168.1.50:554/stream")
-    printer_id = os.environ.get("MQTT_PRINTER_ID", "printer-001")
+    camera_url = os.environ.get(VISION_CAMERA_URL_ENV, VISION_DEFAULT_CAMERA_URL)
+    printer_id = os.environ.get(MQTT_PRINTER_ID_ENV, MQTT_DEFAULT_PRINTER_ID)
 
     # ── 1. Serial connection (no on_reconnect yet — wired after router) ──
     connection = SerialConnection()
@@ -117,9 +129,9 @@ def main():
         job_manager=bridge.job_manager,    # ← public property, not bridge._jobs
         event_publisher=vision_pub,
         guard_config={
-            "failure_threshold": 3,
-            "confidence_min":    0.75,
-            "cooldown_sec":      30.0,
+            "failure_threshold": VISION_FAILURE_THRESHOLD,
+            "confidence_min":    VISION_CONFIDENCE_MIN,
+            "cooldown_sec":      VISION_COOLDOWN_SEC,
         },
     )
     controller = VisionController(monitor)

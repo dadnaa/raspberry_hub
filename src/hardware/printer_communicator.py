@@ -33,15 +33,21 @@ import queue
 import time
 from typing import Optional
 
+from config.settings import (
+    PRINTER_ACK_POLL_SEC,
+    PRINTER_COMMAND_MAX_RETRIES,
+    PRINTER_COMMAND_RETRY_DELAY_SEC,
+    PRINTER_COMMAND_TIMEOUT_SEC,
+)
 from src.hardware.serial_connection import SerialConnection, SerialConnectionError
 from src.utils.telemetry_parser import parse_temperature_line, parse_position_line
 
 logger = logging.getLogger(__name__)
 
-COMMAND_TIMEOUT_SEC = 30.0   # raised from 5s — heating commands can take longer
-MAX_RETRIES         = 2
-RETRY_DELAY_SEC     = 1.0
-_ACK_POLL_SEC       = 0.1    # how long each queue.get() blocks before retry
+COMMAND_TIMEOUT_SEC = PRINTER_COMMAND_TIMEOUT_SEC
+MAX_RETRIES = PRINTER_COMMAND_MAX_RETRIES
+RETRY_DELAY_SEC = PRINTER_COMMAND_RETRY_DELAY_SEC
+_ACK_POLL_SEC = PRINTER_ACK_POLL_SEC
 
 
 class PrinterUnresponsiveError(Exception):

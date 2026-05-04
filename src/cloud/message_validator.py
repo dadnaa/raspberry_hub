@@ -16,28 +16,20 @@ import json
 import logging
 from typing import Optional, Tuple
 
+from config.settings import (
+    MQTT_ALLOWED_GCODE_PREFIXES,
+    MQTT_REQUIRED_COMMAND_FIELDS,
+    MQTT_REQUIRED_START_JOB_FIELDS,
+)
 from src.core.models import CommandMessage, StartJobMessage
 
 logger = logging.getLogger(__name__)
 
 # G-code prefix whitelist — extend as your use case grows
-_ALLOWED_GCODE_PREFIXES = (
-    "M104", "M109", "M140", "M190",   # temperatures
-    "M105",                            # temp report
-    "M106", "M107",                    # fan
-    "M112", "M108",                    # emergency stop / cancel wait
-    "M84",                             # disable motors
-    "M114",                            # position
-    "M115",                            # firmware info
-    "G0",  "G1",                       # moves
-    "G28",                             # home
-    "G29",                             # bed level
-    "G90", "G91", "G92",              # positioning modes
-    "M25", "M24",                      # pause / resume
-)
+_ALLOWED_GCODE_PREFIXES = MQTT_ALLOWED_GCODE_PREFIXES
 
-_REQUIRED_COMMAND_FIELDS  = {"printerId", "commandName", "gcode"}
-_REQUIRED_START_JOB_FIELDS = {"printerId", "jobId", "fileUrl"}
+_REQUIRED_COMMAND_FIELDS = MQTT_REQUIRED_COMMAND_FIELDS
+_REQUIRED_START_JOB_FIELDS = MQTT_REQUIRED_START_JOB_FIELDS
 
 
 class ValidationError(Exception):

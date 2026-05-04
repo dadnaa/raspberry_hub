@@ -17,6 +17,11 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
 
+from config.settings import (
+    VISION_CONFIDENCE_MIN,
+    VISION_COOLDOWN_SEC,
+    VISION_FAILURE_THRESHOLD,
+)
 from src.vision.ai_client import AIInferenceResult
 
 logger = logging.getLogger(__name__)
@@ -48,9 +53,9 @@ class FailureGuard:
 
     def __init__(
         self,
-        failure_threshold: int   = 3,
-        confidence_min:    float = 0.75,
-        cooldown_sec:      float = 30.0,
+        failure_threshold: int   = VISION_FAILURE_THRESHOLD,
+        confidence_min:    float = VISION_CONFIDENCE_MIN,
+        cooldown_sec:      float = VISION_COOLDOWN_SEC,
     ) -> None:
         self._threshold      = failure_threshold
         self._confidence_min = confidence_min

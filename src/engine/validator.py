@@ -14,18 +14,15 @@ This prevents the printer from receiving garbage during edge cases.
 import re
 import logging
 
+from config.settings import COMMAND_ALLOWED_PREFIXES, COMMAND_MAX_LENGTH
+
 logger = logging.getLogger(__name__)
 
 # ── Allowed G-code prefixes ───────────────────────────────────────────────
 # Covers all standard Marlin commands used by Creality printers.
 # Extend this list as new commands are needed in later sprints.
 
-ALLOWED_PREFIXES = (
-    "G",    # Motion commands  (G0, G1, G28, G29, G90, G91, G92 …)
-    "M",    # Machine commands (M104, M105, M109, M114, M115, M140 …)
-    "T",    # Tool select      (T0, T1)
-    ";"  ,  # Comment line     (some slicers emit these; safe to pass)
-)
+ALLOWED_PREFIXES = COMMAND_ALLOWED_PREFIXES
 
 # A minimal pattern: one allowed prefix letter, then digits, optional params
 GCODE_PATTERN = re.compile(
@@ -33,7 +30,7 @@ GCODE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-MAX_COMMAND_LENGTH = 256    # Sane upper bound; Marlin buffers are small
+MAX_COMMAND_LENGTH = COMMAND_MAX_LENGTH
 
 
 class ValidationError(Exception):

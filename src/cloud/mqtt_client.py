@@ -26,12 +26,26 @@ from typing import Callable, Optional
 import paho.mqtt.client as paho
 from paho.mqtt.client import MQTTMessage
 
+from config.settings import (
+    MQTT_BACKOFF_MAX_SEC,
+    MQTT_BACKOFF_START_SEC,
+    MQTT_DEFAULT_CLIENT_ID_SUFFIX,
+    MQTT_DEFAULT_PORT,
+    MQTT_HOST_ENV,
+    MQTT_KEEPALIVE_SEC,
+    MQTT_OUTBOX_MAXSIZE,
+    MQTT_PASSWORD_ENV,
+    MQTT_PORT_ENV,
+    MQTT_PRINTER_ID_ENV,
+    MQTT_USERNAME_ENV,
+)
+
 logger = logging.getLogger(__name__)
 
-_BACKOFF_START  = 2.0
-_BACKOFF_MAX    = 60.0
-_OUTBOX_MAXSIZE = 256
-_KEEPALIVE_SEC  = 30
+_BACKOFF_START = MQTT_BACKOFF_START_SEC
+_BACKOFF_MAX = MQTT_BACKOFF_MAX_SEC
+_OUTBOX_MAXSIZE = MQTT_OUTBOX_MAXSIZE
+_KEEPALIVE_SEC = MQTT_KEEPALIVE_SEC
 
 
 class MQTTClient:
@@ -50,11 +64,11 @@ class MQTTClient:
     """
 
     def __init__(self) -> None:
-        self._host      = os.environ["MQTT_HOST"]
-        self._port      = int(os.environ.get("MQTT_PORT", "8883"))
-        self._username  = os.environ["MQTT_USERNAME"]
-        self._password  = os.environ["MQTT_PASSWORD"]
-        self.printer_id = os.environ["MQTT_PRINTER_ID"]
+        self._host      = os.environ[MQTT_HOST_ENV]
+        self._port      = int(os.environ.get(MQTT_PORT_ENV, str(MQTT_DEFAULT_PORT)))
+        self._username  = os.environ[MQTT_USERNAME_ENV]
+        self._password  = os.environ[MQTT_PASSWORD_ENV]
+        self.printer_id = os.environ[MQTT_PRINTER_ID_ENV]
 
         self._client: paho.Client              = self._build_client()
         self._connected                         = threading.Event()
@@ -123,7 +137,7 @@ class MQTTClient:
 
     def _build_client(self) -> paho.Client:
         client = paho.Client(
-            client_id=f"rasp-arch-{os.environ.get('MQTT_PRINTER_ID', 'edge')}",
+            client_id=f"rasp-arch-{os.environ.get(MQTT_PRINTER_ID_ENV, MQTT_DEFAULT_CLIENT_ID_SUFFIX)}",
             protocol=paho.MQTTv5,
         )
         client.username_pw_set(self._username, self._password)

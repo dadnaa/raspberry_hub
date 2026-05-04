@@ -13,6 +13,7 @@ import threading
 import time
 from typing import Optional
 
+from config.settings import MQTT_STATE_PUBLISH_INTERVAL_SEC
 from src.cloud.mqtt_client       import MQTTClient
 from src.cloud.mqtt_topics       import MQTTTopics
 from src.cloud.mqtt_publisher    import MQTTPublisher
@@ -31,7 +32,7 @@ from src.telemetry.printer_state import PrinterStatus
 
 logger = logging.getLogger(__name__)
 
-_STATE_PUBLISH_INTERVAL_SEC = 10.0
+_STATE_PUBLISH_INTERVAL_SEC = MQTT_STATE_PUBLISH_INTERVAL_SEC
 
 
 class PrinterConfig:
@@ -148,8 +149,7 @@ class MQTTBridge:
         except Exception as exc:
             logger.warning(f"[Bridge] Invalid start-job payload: {exc}")
             return
-        if msg.printerId != self._mqtt.printer_id:
-            logger.warning(f"[Bridge] start-job printerId mismatch: {msg.printerId!r}")
+        if not self._is_for_this_printer(msg, "start-job"):
             return
 
         threading.Thread(
@@ -171,6 +171,8 @@ class MQTTBridge:
         except Exception as exc:
             logger.warning(f"[Bridge] Invalid pause-job: {exc}")
             return
+        if not self._is_for_this_printer(msg, "pause-job"):
+            return
         ok = self._jobs.pause(msg.jobId)
         logger.info(f"[Bridge] pause({msg.jobId}) -> {'ok' if ok else 'not found'}")
 
@@ -179,6 +181,8 @@ class MQTTBridge:
             msg = ResumeJobMessage.from_json(payload)
         except Exception as exc:
             logger.warning(f"[Bridge] Invalid resume-job: {exc}")
+            return
+        if not self._is_for_this_printer(msg, "resume-job"):
             return
         ok = self._jobs.resume(msg.jobId)
         logger.info(f"[Bridge] resume({msg.jobId}) -> {'ok' if ok else 'not found'}")
@@ -189,8 +193,18 @@ class MQTTBridge:
         except Exception as exc:
             logger.warning(f"[Bridge] Invalid stop-job: {exc}")
             return
+        if not self._is_for_this_printer(msg, "stop-job"):
+            return
         ok = self._jobs.cancel(msg.jobId)
         logger.info(f"[Bridge] cancel({msg.jobId}) -> {'ok' if ok else 'not found'}")
+
+    def _is_for_this_printer(self, msg, message_type: str) -> bool:
+        if msg.printerId == self._mqtt.printer_id:
+            return True
+        logger.warning(
+            f"[Bridge] {message_type} printerId mismatch: {msg.printerId!r}"
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Upstream publishing

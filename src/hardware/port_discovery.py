@@ -7,16 +7,15 @@ No port is ever hardcoded.
 import glob
 import logging
 
+from config.settings import SERIAL_BAUD_RATES, SERIAL_PORT_PATTERNS
+
 logger = logging.getLogger(__name__)
 
 # Known USB serial port patterns on Linux (Raspberry Pi)
-PORT_PATTERNS = [
-    "/dev/ttyUSB*",
-    "/dev/ttyACM*",
-]
+PORT_PATTERNS = SERIAL_PORT_PATTERNS
 
 # Standard baud rates for Creality printers (priority order)
-CREALITY_BAUD_RATES = [115200, 250000]
+CREALITY_BAUD_RATES = SERIAL_BAUD_RATES
 
 
 def discover_ports() -> list[str]:

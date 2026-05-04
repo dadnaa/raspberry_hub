@@ -41,14 +41,20 @@ from typing import Callable, Optional
 import serial
 import serial.serialutil
 
+from config.settings import (
+    SERIAL_MAX_RECONNECT_ATTEMPTS,
+    SERIAL_READ_TIMEOUT_SEC,
+    SERIAL_RECONNECT_DELAY_SEC,
+    SERIAL_STARTUP_STABILIZATION_DELAY_SEC,
+)
 from src.hardware.port_discovery import get_printer_port, CREALITY_BAUD_RATES
 
 logger = logging.getLogger(__name__)
 
-STARTUP_STABILIZATION_DELAY = 3.0
-READ_TIMEOUT_SEC             = 5.0
-RECONNECT_DELAY_SEC          = 5.0
-MAX_RECONNECT_ATTEMPTS       = 5
+STARTUP_STABILIZATION_DELAY = SERIAL_STARTUP_STABILIZATION_DELAY_SEC
+READ_TIMEOUT_SEC = SERIAL_READ_TIMEOUT_SEC
+RECONNECT_DELAY_SEC = SERIAL_RECONNECT_DELAY_SEC
+MAX_RECONNECT_ATTEMPTS = SERIAL_MAX_RECONNECT_ATTEMPTS
 
 
 class SerialConnectionError(Exception):

@@ -22,6 +22,7 @@ import queue
 import time
 from typing import Callable, List, Optional
 
+from config.settings import TELEMETRY_IDLE_TIMEOUT_SEC, TELEMETRY_STOP_TIMEOUT_SEC
 from src.telemetry.printer_state import PrinterStatus
 from src.telemetry.state_manager  import StateManager
 from src.telemetry.telemetry_event import TelemetryEvent
@@ -30,7 +31,7 @@ from src.telemetry import telemetry_parser as parser
 logger = logging.getLogger(__name__)
 
 # How many seconds of silence before we consider the printer IDLE
-_IDLE_TIMEOUT_SEC = 5.0
+_IDLE_TIMEOUT_SEC = TELEMETRY_IDLE_TIMEOUT_SEC
 
 
 class TelemetryEngine:
@@ -83,7 +84,7 @@ class TelemetryEngine:
         self._thread.start()
         logger.info("[Telemetry] Engine started.")
 
-    def stop(self, timeout: float = 3.0) -> None:
+    def stop(self, timeout: float = TELEMETRY_STOP_TIMEOUT_SEC) -> None:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=timeout)

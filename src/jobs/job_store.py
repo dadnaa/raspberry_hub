@@ -16,11 +16,12 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from config.settings import JOB_STORAGE_DIR
 from src.jobs.job_model import Job
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DIR = Path("data/jobs")
+_DEFAULT_DIR = JOB_STORAGE_DIR
 
 
 class JobStore:

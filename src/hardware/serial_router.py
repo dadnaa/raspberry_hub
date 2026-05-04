@@ -35,13 +35,18 @@ import queue
 import threading
 from typing import Optional
 
+from config.settings import (
+    SERIAL_ACK_QUEUE_SIZE,
+    SERIAL_ROUTER_STOP_TIMEOUT_SEC,
+    SERIAL_TELEMETRY_QUEUE_SIZE,
+)
 from src.hardware.serial_connection import SerialConnection
 
 logger = logging.getLogger(__name__)
 
 # Bounded queues — prevents memory growth if a consumer falls behind
-_ACK_QUEUE_SIZE       = 128
-_TELEMETRY_QUEUE_SIZE = 256
+_ACK_QUEUE_SIZE = SERIAL_ACK_QUEUE_SIZE
+_TELEMETRY_QUEUE_SIZE = SERIAL_TELEMETRY_QUEUE_SIZE
 
 
 class SerialRouter:
@@ -95,7 +100,7 @@ class SerialRouter:
         self._thread.start()
         logger.info("[SerialRouter] Started — single reader, dual-queue fan-out.")
 
-    def stop(self, timeout: float = 3.0) -> None:
+    def stop(self, timeout: float = SERIAL_ROUTER_STOP_TIMEOUT_SEC) -> None:
         """Stop the reader thread gracefully."""
         self._stop_event.set()
         if self._thread:

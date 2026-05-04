@@ -34,13 +34,20 @@ from src.hardware.printer_communicator import (
     PrinterUnresponsiveError,
 )
 from src.hardware.serial_connection import SerialConnectionError
+from config.settings import (
+    COMMAND_ERROR_RECOVERY_DELAY_SEC,
+    COMMAND_HISTORY_LIMIT,
+    COMMAND_MAX_QUEUE_SIZE,
+    COMMAND_PROCESSOR_STOP_TIMEOUT_SEC,
+    COMMAND_QUEUE_POLL_INTERVAL_SEC,
+)
 
 logger = logging.getLogger(__name__)
 
 # ── Tuning constants ──────────────────────────────────────────────────────
-QUEUE_POLL_INTERVAL_SEC = 0.05    # How often idle loop checks the queue
-ERROR_RECOVERY_DELAY    = 2.0     # Pause after a command failure before resuming
-MAX_QUEUE_SIZE          = 256     # Hard cap; prevents unbounded memory growth
+QUEUE_POLL_INTERVAL_SEC = COMMAND_QUEUE_POLL_INTERVAL_SEC
+ERROR_RECOVERY_DELAY = COMMAND_ERROR_RECOVERY_DELAY_SEC
+MAX_QUEUE_SIZE = COMMAND_MAX_QUEUE_SIZE
 
 
 class QueueProcessor:
@@ -65,7 +72,7 @@ class QueueProcessor:
         # History of completed entries (bounded to last 500)
         self._history: list[CommandEntry] = []
         self._history_lock = threading.Lock()
-        self._HISTORY_LIMIT = 500
+        self._HISTORY_LIMIT = COMMAND_HISTORY_LIMIT
 
     # ------------------------------------------------------------------
     # Public control API
@@ -86,7 +93,7 @@ class QueueProcessor:
         self._thread.start()
         logger.info("[Processor] Started.")
 
-    def stop(self, timeout_sec: float = 10.0) -> None:
+    def stop(self, timeout_sec: float = COMMAND_PROCESSOR_STOP_TIMEOUT_SEC) -> None:
         """
         Signal shutdown and wait for the worker thread to finish.
 
