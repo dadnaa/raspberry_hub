@@ -1,107 +1,164 @@
 """
-main.py — Sprint 3 Entry Point
+main.py — Fixed Entry Point (applies to Sprint 4 onwards)
 
-Reactive Edge Hub: Telemetry + State Intelligence Layer
+KEY WIRING CHANGES vs previous main.py versions
+─────────────────────────────────────────────────
+1. SerialRouter is created after connect() and started immediately.
+   It owns the ONE background thread that calls read_line().
 
-Run:
-    python main.py
+2. CommandEngine receives the router so PrinterCommunicator
+   reads from router.ack_queue instead of calling read_line() directly.
 
-What's new in Sprint 3:
-  - TelemetryEngine runs in a parallel daemon thread
-  - StateManager holds live printer state
-  - Command queue + telemetry operate independently (no mutual blocking)
+3. TelemetryEngine receives router.telemetry_queue — unchanged API,
+   but now fed correctly by SerialRouter instead of nothing.
+
+4. SerialConnection receives router.reset_queues as on_reconnect hook
+   so stale queue data is flushed atomically on reconnect.
+
+5. VisionController is wired via bridge.job_manager (public property)
+   and bridge.mqtt_client (public property) — no more private attribute access.
 """
 
-import sys
 import os
-import time
+import sys
+import signal
+import threading
+import logging
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.utils.logger_setup        import setup_logging
-from src.hardware.serial_connection import SerialConnection, SerialConnectionError
-from src.engine.command_engine      import CommandEngine
-from src.telemetry                  import StateManager, TelemetryEngine
-import logging
+from src.utils.logger_setup          import setup_logging
+from src.hardware.serial_connection   import SerialConnection, SerialConnectionError
+from src.hardware.serial_router       import SerialRouter
+from src.engine.command_engine        import CommandEngine
+from src.telemetry                    import StateManager, TelemetryEngine
+from src.mqtt.mqtt_bridge             import MQTTBridge, PrinterConfig
+from src.vision.ai_client             import AIClient
+from src.vision.vision_monitor        import VisionMonitor
+from src.vision.vision_controller     import VisionController
+from src.vision.vision_event_publisher import VisionEventPublisher
 
-setup_logging(session_name="sprint3")
+setup_logging(session_name="rasp-arch")
 logger = logging.getLogger(__name__)
 
-# Commands to exercise command queue while telemetry runs
-BATCH_COMMANDS = ["M115", "M105", "M114", "M105", "M114"]
-
-# How long to let both systems run together (seconds)
-PARALLEL_RUN_SEC = 10
-
-
-def on_telemetry_event(event):
-    """Simple console subscriber — Sprint 4 will replace this with MQTT publish."""
-    logger.info(f"[Event] {event.timestamp} changed={list(event.changed_fields.keys())}")
+PRINTER_CONFIG = PrinterConfig(
+    name="Creality Ender-3",
+    model="Ender-3",
+    nozzle_diameter=0.4,
+)
 
 
-def run_sprint3():
+def main():
     logger.info("=" * 60)
-    logger.info("  Reactive Edge Hub — Sprint 3: Telemetry + State Layer")
+    logger.info("  Reactive Edge Hub — Full Stack (Sprints 1-6)")
     logger.info("=" * 60)
 
-    # ── 1. Serial connection ──────────────────────────────────────────
+    camera_url = os.environ.get("VISION_CAMERA_URL", "rtsp://192.168.1.50:554/stream")
+    printer_id = os.environ.get("MQTT_PRINTER_ID", "printer-001")
+
+    # ── 1. Serial connection (no on_reconnect yet — wired after router) ──
     connection = SerialConnection()
     try:
         connection.connect()
-        logger.info(f"[Main] Connected: {connection.port_path} @ {connection.baud_rate} baud")
+        logger.info(f"[Main] Serial: {connection.port_path} @ {connection.baud_rate}")
     except SerialConnectionError as exc:
-        logger.critical(f"[Main] Connection failed: {exc}")
+        logger.critical(f"[Main] Serial failed: {exc}")
         sys.exit(1)
 
-    # ── 2. State manager (shared single source of truth) ─────────────
+    # ── 2. Serial router — THE FIX ────────────────────────────────────
+    #    Must be created BEFORE CommandEngine and TelemetryEngine.
+    #    Owns the single read_line() call loop.
+    router = SerialRouter(connection)
+
+    # Wire reconnect hook: when serial reconnects, flush stale queue data
+    connection._on_reconnect = router.reset_queues
+
+    router.start()
+
+    # ── 3. State manager ──────────────────────────────────────────────
     state_manager = StateManager()
 
-    # ── 3. Telemetry engine (reads serial output in background) ───────
-    # The SerialConnection must expose a `line_queue` (queue.Queue)
-    # that it pushes all decoded lines into.  See notes below.
+    # ── 4. Telemetry engine — receives router.telemetry_queue ─────────
+    #    Every line the router reads is copied here automatically.
     telemetry = TelemetryEngine(
-        line_queue=connection.line_queue,
+        line_queue=router.telemetry_queue,   # ← fed by SerialRouter
         state_manager=state_manager,
-        on_event=on_telemetry_event,
     )
+
+    # ── 5. Command engine — receives router.ack_queue ─────────────────
+    #    PrinterCommunicator reads acks from queue, never from read_line().
+    command_engine = CommandEngine(connection, router=router)
+    #
+    # NOTE: CommandEngine.__init__ must be updated to accept `router`:
+    #
+    #   def __init__(self, connection: SerialConnection, router: SerialRouter):
+    #       self._comm = PrinterCommunicator(connection, ack_queue=router.ack_queue)
+    #       self._processor = QueueProcessor(self._comm)
+    #       self._lock = threading.Lock()
+    #       self._on_complete = None
+
+    # ── 6. MQTT bridge ────────────────────────────────────────────────
+    bridge = MQTTBridge(
+        command_engine=command_engine,
+        state_manager=state_manager,
+        printer_config=PRINTER_CONFIG,
+    )
+
+    # ── 7. Vision layer ───────────────────────────────────────────────
+    ai_client  = AIClient()
+    vision_pub = VisionEventPublisher(
+        mqtt_client=bridge.mqtt_client,    # ← public property, not bridge._mqtt
+        printer_id=printer_id,
+    )
+    monitor = VisionMonitor(
+        stream_url=camera_url,
+        ai_client=ai_client,
+        job_manager=bridge.job_manager,    # ← public property, not bridge._jobs
+        event_publisher=vision_pub,
+        guard_config={
+            "failure_threshold": 3,
+            "confidence_min":    0.75,
+            "cooldown_sec":      30.0,
+        },
+    )
+    controller = VisionController(monitor)
+    bridge.job_manager.set_state_listener(controller.on_job_state_change)
+
+    # ── 8. Start all layers in dependency order ───────────────────────
+    # router already started (step 2)
     telemetry.start()
+    command_engine.start()
+    bridge.start()
+    # Vision activates automatically when a job transitions to PRINTING
 
-    # ── 4. Command engine (unchanged from Sprint 2) ───────────────────
-    engine = CommandEngine(connection)
-    engine.start()
+    logger.info("[Main] All systems running.")
+    logger.info("[Main]   SerialRouter   → single reader, dual-queue fan-out")
+    logger.info("[Main]   TelemetryEngine→ reading telemetry_queue")
+    logger.info("[Main]   CommandEngine  → reading ack_queue")
+    logger.info("[Main]   MQTTBridge     → connected to HiveMQ")
+    logger.info("[Main]   VisionMonitor  → activates on PRINTING jobs")
 
-    try:
-        logger.info(f"\n[Main] Running {len(BATCH_COMMANDS)} commands while telemetry streams...")
-        results = engine.send_batch(BATCH_COMMANDS)
+    # ── 9. Graceful shutdown on SIGINT / SIGTERM ──────────────────────
+    stop = threading.Event()
 
-        for r in results:
-            icon = "✓" if r.succeeded else "✗"
-            ms   = f"{round(r.elapsed_ms)} ms" if r.elapsed_ms else "N/A"
-            logger.info(f"[Main] {icon} {r.gcode:20s} {r.status.name:10s} {ms:>8s}")
+    def _shutdown(sig, frame):
+        logger.info(f"[Main] Signal {sig} — shutting down.")
+        stop.set()
 
-        # Let telemetry run freely for a while
-        logger.info(f"\n[Main] Letting telemetry run for {PARALLEL_RUN_SEC}s...")
-        for i in range(PARALLEL_RUN_SEC):
-            time.sleep(1)
-            snap = state_manager.get_snapshot()
-            logger.info(
-                f"[State] t+{i+1:02d}s  status={snap.status.name}"
-                f"  T={snap.nozzle_temp}°C  B={snap.bed_temp}°C"
-                f"  pos=({snap.position_x}, {snap.position_y}, {snap.position_z})"
-                f"  progress={snap.progress_pct}%"
-            )
+    signal.signal(signal.SIGINT,  _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+    stop.wait()
 
-    finally:
-        engine.stop()
-        telemetry.stop()
-        connection.disconnect()
-
-    logger.info("\n[Main] Sprint 3 complete.")
-    logger.info("[Main] Final state snapshot:")
-    final = state_manager.get_snapshot()
-    for k, v in final.to_dict().items():
-        logger.info(f"  {k:20s}: {v}")
+    logger.info("[Main] Stopping all layers...")
+    controller.shutdown()
+    bridge.stop()
+    command_engine.stop()
+    telemetry.stop()
+    router.stop()
+    connection.disconnect()
+    logger.info("[Main] Clean shutdown complete.")
 
 
 if __name__ == "__main__":
-    run_sprint3()
+    main()

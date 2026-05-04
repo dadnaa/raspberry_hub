@@ -9,9 +9,35 @@ Responsibilities:
 - Detect disconnection and trigger reconnect
 - Never expose serial port to upper layers directly
 """
+"""
+serial_connection.py — Fixed: Added reconnect hook for SerialRouter
+
+CHANGES FROM SPRINT 2
+─────────────────────
+1. Added `on_reconnect` callback parameter to __init__
+   SerialRouter registers itself here so it can flush its queues
+   and restart its read loop after a reconnect event.
+
+2. reconnect() now calls on_reconnect() if registered.
+
+3. Everything else is IDENTICAL to Sprint 2.
+
+WHY
+───
+When the serial port drops and reconnects, the OS serial buffer is fresh.
+Any lines still sitting in SerialRouter's queues are from the old connection
+and could cause:
+  - a stale "ok" being matched to the wrong command
+  - stale telemetry updating state with old data
+
+The on_reconnect hook lets SerialRouter flush both queues atomically
+before the new connection starts feeding data.
+"""
 
 import logging
 import time
+from typing import Callable, Optional
+
 import serial
 import serial.serialutil
 
@@ -19,10 +45,9 @@ from src.hardware.port_discovery import get_printer_port, CREALITY_BAUD_RATES
 
 logger = logging.getLogger(__name__)
 
-# Timing constants
-STARTUP_STABILIZATION_DELAY = 3.0   # seconds — wait for printer reset after connect
-READ_TIMEOUT_SEC             = 5.0   # seconds — serial read line timeout
-RECONNECT_DELAY_SEC          = 5.0   # seconds — pause before reconnect attempt
+STARTUP_STABILIZATION_DELAY = 3.0
+READ_TIMEOUT_SEC             = 5.0
+RECONNECT_DELAY_SEC          = 5.0
 MAX_RECONNECT_ATTEMPTS       = 5
 
 
@@ -34,18 +59,23 @@ class SerialConnection:
     """
     Low-level serial connection wrapper for the Creality printer.
 
-    This class is the ONLY place in the system allowed to touch
-    the pyserial port object directly.
+    Args:
+        on_reconnect: Optional callback invoked after a successful reconnect.
+                      SerialRouter uses this to flush stale queue data.
     """
 
-    def __init__(self):
-        self._port: serial.Serial | None = None
-        self._port_path: str | None = None
-        self._baud_rate: int | None = None
-        self._connected: bool = False
+    def __init__(
+        self,
+        on_reconnect: Optional[Callable[[], None]] = None,
+    ) -> None:
+        self._port:         serial.Serial | None = None
+        self._port_path:    str | None = None
+        self._baud_rate:    int | None = None
+        self._connected:    bool = False
+        self._on_reconnect: Optional[Callable[[], None]] = on_reconnect
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API (unchanged except reconnect())
     # ------------------------------------------------------------------
 
     @property
@@ -61,15 +91,6 @@ class SerialConnection:
         return self._baud_rate
 
     def connect(self) -> bool:
-        """
-        Discover port and attempt connection at each supported baud rate.
-
-        Returns:
-            bool: True if connection succeeded.
-
-        Raises:
-            SerialConnectionError: If no port is found or all baud rates fail.
-        """
         port_path, all_ports = get_printer_port()
 
         if not port_path:
@@ -90,10 +111,7 @@ class SerialConnection:
                 self._port_path = port_path
                 self._baud_rate = baud
                 self._connected = True
-
-                logger.info(
-                    f"[Serial] Connected → {port_path} @ {baud} baud"
-                )
+                logger.info(f"[Serial] Connected → {port_path} @ {baud} baud")
                 self._stabilize_after_connect()
                 return True
 
@@ -107,7 +125,6 @@ class SerialConnection:
         )
 
     def disconnect(self) -> None:
-        """Safely close the serial port."""
         if self._port and self._port.is_open:
             try:
                 self._port.close()
@@ -121,8 +138,8 @@ class SerialConnection:
         """
         Attempt to reconnect after a disconnection event.
 
-        Returns:
-            bool: True if reconnect succeeded within max attempts.
+        After a successful reconnect, calls on_reconnect() if registered
+        so SerialRouter can flush its stale queues before new data arrives.
         """
         logger.warning("[Serial] Attempting reconnect …")
         self.disconnect()
@@ -131,7 +148,14 @@ class SerialConnection:
             logger.info(f"[Serial] Reconnect attempt {attempt}/{MAX_RECONNECT_ATTEMPTS}")
             time.sleep(RECONNECT_DELAY_SEC)
             try:
-                return self.connect()
+                result = self.connect()
+                if result and self._on_reconnect:
+                    # Flush stale queue data before new serial data arrives
+                    try:
+                        self._on_reconnect()
+                    except Exception:
+                        logger.exception("[Serial] on_reconnect callback failed.")
+                return result
             except SerialConnectionError as exc:
                 logger.warning(f"[Serial] Reconnect failed: {exc}")
 
@@ -139,28 +163,15 @@ class SerialConnection:
         return False
 
     def write_line(self, command: str) -> bool:
-        """
-        Write a single G-code command to the printer.
-
-        The command is automatically terminated with \\n and flushed.
-
-        Args:
-            command: G-code string (e.g. "M105").
-
-        Returns:
-            bool: True if write succeeded.
-        """
         if not self.is_connected:
             logger.error("[Serial] Write attempted on closed port.")
             return False
-
         line = command.strip() + "\n"
         try:
             self._port.write(line.encode("ascii", errors="replace"))
             self._port.flush()
             logger.debug(f"[Serial] >> {command.strip()}")
             return True
-
         except serial.SerialException as exc:
             logger.error(f"[Serial] Write error: {exc}")
             self._connected = False
@@ -170,30 +181,23 @@ class SerialConnection:
         """
         Read one line from the serial port.
 
-        Cleans non-ASCII bytes before returning.
-
-        Returns:
-            str | None: Decoded line (stripped), or None on error/timeout.
+        NOTE: After SerialRouter is wired in, this should ONLY be called
+        by SerialRouter._read_loop(). No other code should call this.
         """
         if not self.is_connected:
             return None
-
         try:
             raw = self._port.readline()
             if not raw:
-                return None  # Timeout (no data within READ_TIMEOUT_SEC)
-
-            # Decode, replacing any garbage bytes
+                return None
             line = raw.decode("ascii", errors="replace").strip()
             return line if line else None
-
         except serial.SerialException as exc:
             logger.error(f"[Serial] Read error: {exc}")
             self._connected = False
             return None
 
     def flush_buffers(self) -> None:
-        """Clear input and output buffers (used after connect / on error)."""
         if self._port and self._port.is_open:
             try:
                 self._port.reset_input_buffer()
@@ -203,25 +207,16 @@ class SerialConnection:
                 logger.warning(f"[Serial] Buffer flush failed: {exc}")
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Internal helpers (unchanged)
     # ------------------------------------------------------------------
 
     def _stabilize_after_connect(self) -> None:
-        """
-        Wait for the printer to finish its reset/boot sequence.
-
-        During this window we flush buffers and drain startup noise
-        so upper layers never see firmware boot messages.
-        """
-        logger.info(
-            f"[Serial] Stabilizing … ({STARTUP_STABILIZATION_DELAY}s)"
-        )
+        logger.info(f"[Serial] Stabilizing … ({STARTUP_STABILIZATION_DELAY}s)")
         time.sleep(STARTUP_STABILIZATION_DELAY)
         self.flush_buffers()
 
-        # Drain any remaining startup lines
         drained = 0
-        self._port.timeout = 0.2          # Short timeout for drain loop
+        self._port.timeout = 0.2
         while True:
             raw = self._port.readline()
             if not raw:
@@ -232,8 +227,5 @@ class SerialConnection:
                 f"{raw.decode('ascii', errors='replace').strip()}"
             )
 
-        self._port.timeout = READ_TIMEOUT_SEC   # Restore normal timeout
-        logger.info(
-            f"[Serial] Stabilization complete. "
-            f"Discarded {drained} boot line(s)."
-        )
+        self._port.timeout = READ_TIMEOUT_SEC
+        logger.info(f"[Serial] Stabilization complete. Discarded {drained} boot line(s).")

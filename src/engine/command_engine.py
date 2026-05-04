@@ -30,7 +30,7 @@ from src.engine.queue_processor import QueueProcessor
 from src.engine.validator import validate_command, validate_batch, ValidationError
 from src.hardware.printer_communicator import PrinterCommunicator
 from src.hardware.serial_connection import SerialConnection
-
+from src.hardware.serial_router import SerialRouter
 logger = logging.getLogger(__name__)
 
 # How long send() blocks waiting for a result before timing out
@@ -51,14 +51,16 @@ class CommandEngine:
     Thread-safe: send() and send_batch() can be called from any thread.
     """
 
-    def __init__(self, connection: SerialConnection):
-        self._comm      = PrinterCommunicator(connection)
+    def __init__(self, connection, router: SerialRouter):
+        from src.hardware.printer_communicator import PrinterCommunicator
+        from src.engine.queue_processor import QueueProcessor
+        import threading
+ 
+        self._comm      = PrinterCommunicator(connection, ack_queue=router.ack_queue)
         self._processor = QueueProcessor(self._comm)
         self._lock      = threading.Lock()
-
-        # Optional callback: called with CommandResult after each command
-        self._on_complete: Callable[[CommandResult], None] | None = None
-
+        self._on_complete = None
+ 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
