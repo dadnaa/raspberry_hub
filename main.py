@@ -33,7 +33,7 @@ from src.hardware.serial_connection   import SerialConnection, SerialConnectionE
 from src.hardware.serial_router       import SerialRouter
 from src.engine.command_engine        import CommandEngine
 from src.telemetry                    import StateManager, TelemetryEngine
-from src.mqtt.mqtt_bridge             import MQTTBridge, PrinterConfig
+from src.cloud.mqtt_bridge             import MQTTBridge, PrinterConfig
 from src.vision.ai_client             import AIClient
 from src.vision.vision_monitor        import VisionMonitor
 from src.vision.vision_controller     import VisionController
