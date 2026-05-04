@@ -64,12 +64,4 @@ class MQTTTopics:
 
     def __repr__(self) -> str:
         return f"MQTTTopics(printer_id={self._id!r})"
-    @property
-    def job_manager(self) -> JobManager:
-       """The JobManager instance owned by this bridge."""
-       return self._jobs
-
-    @property
-    def mqtt_client(self) -> MQTTClient:
-        """The MQTTClient instance owned by this bridge."""
-        return self._mqtt
+    

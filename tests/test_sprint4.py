@@ -21,10 +21,10 @@ from src.core.models import (
     PrinterStateMessage,
     JobStateMessage,
 )
-from src.mqtt.mqtt_topics       import MQTTTopics
-from src.mqtt.message_validator import MessageValidator, ValidationError
-from src.mqtt.mqtt_publisher    import MQTTPublisher
-from src.mqtt.command_router    import CommandRouter
+from src.cloud.mqtt_topics       import MQTTTopics
+from src.cloud.message_validator import MessageValidator, ValidationError
+from src.cloud.mqtt_publisher    import MQTTPublisher
+from src.cloud.command_router    import CommandRouter
 
 
 PRINTER_ID = "printer-test-001"

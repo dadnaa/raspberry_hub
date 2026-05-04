@@ -15,8 +15,8 @@ Topics published:
 import logging
 from datetime import datetime, timezone
 
-from src.mqtt.mqtt_client  import MQTTClient
-from src.mqtt.mqtt_topics  import MQTTTopics
+from src.cloud.mqtt_client  import MQTTClient
+from src.cloud.mqtt_topics  import MQTTTopics
 from src.core.models import (
     HandshakeMessage,
     PrinterStateMessage,

@@ -13,11 +13,11 @@ import threading
 import time
 from typing import Optional
 
-from src.mqtt.mqtt_client       import MQTTClient
-from src.mqtt.mqtt_topics       import MQTTTopics
-from src.mqtt.mqtt_publisher    import MQTTPublisher
-from src.mqtt.message_validator import MessageValidator
-from src.mqtt.command_router    import CommandRouter
+from src.cloud.mqtt_client       import MQTTClient
+from src.cloud.mqtt_topics       import MQTTTopics
+from src.cloud.mqtt_publisher    import MQTTPublisher
+from src.cloud.message_validator import MessageValidator
+from src.cloud.command_router    import CommandRouter
 from src.jobs.job_manager       import JobManager
 from src.core.models import (
     HandshakeMessage,
@@ -242,3 +242,12 @@ class MQTTBridge:
                 break
             if self._mqtt.is_connected:
                 self._publish_printer_state()
+    @property
+    def job_manager(self) -> JobManager:
+       """The JobManager instance owned by this bridge."""
+       return self._jobs
+
+    @property
+    def mqtt_client(self) -> MQTTClient:
+        """The MQTTClient instance owned by this bridge."""
+        return self._mqtt

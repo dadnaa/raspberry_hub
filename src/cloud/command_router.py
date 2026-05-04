@@ -24,9 +24,9 @@ from src.core.models import (
     StartJobMessage,
     CommandResponseMessage,
 )
-from src.mqtt.mqtt_topics      import MQTTTopics
-from src.mqtt.mqtt_publisher   import MQTTPublisher
-from src.mqtt.message_validator import MessageValidator, ValidationError
+from src.cloud.mqtt_topics      import MQTTTopics
+from src.cloud.mqtt_publisher   import MQTTPublisher
+from src.cloud.message_validator import MessageValidator, ValidationError
 
 logger = logging.getLogger(__name__)
 
