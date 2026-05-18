@@ -76,6 +76,7 @@ class FrameSampler:
         self._camera_id  = camera_id
 
         self._stop_event   = threading.Event()
+        self._wake_event   = threading.Event()
         self._busy         = threading.Event()   # set while callback running
         self._thread:      Optional[threading.Thread] = None
 
@@ -95,12 +96,14 @@ class FrameSampler:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._wake_event.set()
         if self._thread:
             self._thread.join(timeout=self._interval + 2)
         logger.info("[Sampler] Stopped.")
 
     def set_interval(self, seconds: float) -> None:
         self._interval = max(MIN_INTERVAL_SEC, min(MAX_INTERVAL_SEC, seconds))
+        self._wake_event.set()
         logger.debug(f"[Sampler] Interval updated to {self._interval}s")
 
     def update_context(self, job_id: str = "", printer_id: str = "") -> None:
@@ -114,7 +117,8 @@ class FrameSampler:
 
     def _sample_loop(self) -> None:
         while not self._stop_event.is_set():
-            self._stop_event.wait(timeout=self._interval)
+            self._wake_event.wait(timeout=self._interval)
+            self._wake_event.clear()
             if self._stop_event.is_set():
                 break
 

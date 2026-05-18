@@ -22,6 +22,7 @@ from src.core.models     import JobStateMessage
 logger = logging.getLogger(__name__)
 
 _PAUSE_POLL_INTERVAL = JOB_PAUSE_POLL_INTERVAL_SEC
+_COMMAND_YIELD_SEC = 0.01
 
 
 def _utc_now() -> str:
@@ -66,14 +67,21 @@ class JobExecutor:
     def pause(self) -> None:
         if self._job.status == "PRINTING":
             self._pause_event.set()
+            self._job.mark_paused()
+            self._persist_and_publish()
 
     def resume(self) -> None:
         if self._job.status == "PAUSED":
             self._pause_event.clear()
+            self._job.mark_printing()
+            self._persist_and_publish()
 
     def cancel(self) -> None:
         self._cancel_event.set()
         self._pause_event.clear()
+        if not self._job.is_terminal:
+            self._job.mark_cancelled()
+            self._persist_and_publish()
 
     @property
     def is_running(self) -> bool:
@@ -81,6 +89,10 @@ class JobExecutor:
 
     def _stream_loop(self) -> None:
         job = self._job
+        if self._cancel_event.is_set() or job.status == "CANCELLED":
+            job.mark_cancelled()
+            self._persist_and_publish(); self._fire_finished(); return
+
         job.mark_printing()
         self._persist_and_publish()
 
@@ -114,6 +126,7 @@ class JobExecutor:
                 job.current_line_index += 1
                 job.update_progress()
                 self._persist_and_publish()
+                time.sleep(_COMMAND_YIELD_SEC)
 
             if not self._cancel_event.is_set():
                 job.mark_completed()

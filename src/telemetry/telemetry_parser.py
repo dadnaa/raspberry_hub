@@ -14,12 +14,12 @@ from typing import Optional
 
 # Temperature: "T:205.3 /210.0 B:60.1 /60.0"
 # or           "ok T:205.3 B:60.1"
-_RE_TEMP = re.compile(
-    r"T:(?P<nozzle>[\d.]+)"
-    r"(?:\s*/(?P<nozzle_target>[\d.]+))?"
-    r".*?"
-    r"(?:B:(?P<bed>[\d.]+)"
-    r"(?:\s*/(?P<bed_target>[\d.]+))?)?",
+_RE_NOZZLE_TEMP = re.compile(
+    r"T:(?P<value>[\d.]+)(?:\s*/(?P<target>[\d.]+))?",
+    re.IGNORECASE,
+)
+_RE_BED_TEMP = re.compile(
+    r"B:(?P<value>[\d.]+)(?:\s*/(?P<target>[\d.]+))?",
     re.IGNORECASE,
 )
 
@@ -81,17 +81,16 @@ class ProgressReading:
 
 def parse_temperature(line: str) -> Optional[TemperatureReading]:
     """Extract nozzle and bed temperatures from a serial line."""
-    m = _RE_TEMP.search(line)
-    if not m:
+    nozzle_match = _RE_NOZZLE_TEMP.search(line)
+    bed_match = _RE_BED_TEMP.search(line)
+    if not nozzle_match and not bed_match:
         return None
-    nozzle = m.group("nozzle")
-    if nozzle is None:
-        return None
+
     return TemperatureReading(
-        nozzle        = float(nozzle),
-        nozzle_target = float(m.group("nozzle_target")) if m.group("nozzle_target") else None,
-        bed           = float(m.group("bed"))           if m.group("bed")           else None,
-        bed_target    = float(m.group("bed_target"))    if m.group("bed_target")    else None,
+        nozzle        = float(nozzle_match.group("value")) if nozzle_match else None,
+        nozzle_target = float(nozzle_match.group("target")) if nozzle_match and nozzle_match.group("target") else None,
+        bed           = float(bed_match.group("value")) if bed_match else None,
+        bed_target    = float(bed_match.group("target")) if bed_match and bed_match.group("target") else None,
     )
 
 
