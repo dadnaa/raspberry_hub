@@ -268,7 +268,7 @@ class JobManager:
             progress=job.progress,
             startedAt=job.started_at,
             finishedAt=job.finished_at,
-            estimatedTime=0,
+            estimatedTime=job.estimated_remaining_seconds,
             reason=job.failure_reason,
         )
         try:

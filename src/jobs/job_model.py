@@ -120,6 +120,35 @@ class Job:
                 min(100.0, (self.current_line_index / self.total_lines) * 100), 2
             )
 
+    @property
+    def estimated_remaining_seconds(self) -> int:
+        """Estimate remaining job time from elapsed runtime and completed lines."""
+        if (
+            self.status not in ("PRINTING", "PAUSED")
+            or not self.started_at
+            or self.current_line_index <= 0
+            or self.total_lines <= 0
+            or self.current_line_index >= self.total_lines
+        ):
+            return 0
+
+        try:
+            started = datetime.fromisoformat(self.started_at)
+        except ValueError:
+            return 0
+
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        if elapsed <= 0:
+            return 0
+
+        progress_ratio = self.current_line_index / self.total_lines
+        if progress_ratio <= 0:
+            return 0
+
+        estimated_total = elapsed / progress_ratio
+        remaining = max(0.0, estimated_total - elapsed)
+        return int(round(remaining))
+
     # ------------------------------------------------------------------
     # Serialization (persistence + MQTT)
     # ------------------------------------------------------------------
