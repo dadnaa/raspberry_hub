@@ -149,6 +149,18 @@ class Job:
         remaining = max(0.0, estimated_total - elapsed)
         return int(round(remaining))
 
+    @property
+    def estimated_remaining_display(self) -> str:
+        """Format estimated remaining time for MQTT job-state payloads."""
+        seconds = self.estimated_remaining_seconds
+        if seconds <= 0:
+            return "0h 00m"
+
+        total_minutes = (seconds + 59) // 60
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        return f"{hours}h {minutes:02d}m"
+
     # ------------------------------------------------------------------
     # Serialization (persistence + MQTT)
     # ------------------------------------------------------------------

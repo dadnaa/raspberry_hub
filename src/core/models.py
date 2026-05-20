@@ -10,7 +10,7 @@ Adds:
 
 from __future__ import annotations
 from dataclasses import dataclass, asdict, field
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 import json
 
 # ── Type aliases ──────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ class JobStateMessage:
     progress:      float
     startedAt:     Optional[str]
     finishedAt:    Optional[str]
-    estimatedTime: int
+    estimatedTime: Union[int, str]
     reason:        Optional[str] = None
 
     def to_json(self) -> str:
