@@ -8,7 +8,7 @@ Timestamps are injected here, not in the model constructors.
 Topics published:
   printers/{id}/handshake
   printers/{id}/printer-state
-  printers/jobs/job-state
+  printers/{id}/jobs/job-state
   printers/{id}/command-state
 """
 

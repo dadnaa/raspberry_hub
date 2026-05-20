@@ -79,7 +79,7 @@ class PrinterStateMessage:
 
 @dataclass
 class JobStateMessage:
-    """Mapped to MQTT: printers/jobs/job-state"""
+    """Mapped to MQTT: printers/{id}/jobs/job-state"""
     jobId:         str
     printerId:     str
     fileUrl:       str

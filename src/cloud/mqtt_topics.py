@@ -22,7 +22,7 @@ class MQTTTopics:
 
     @property
     def job_state(self) -> str:
-        return "printers/jobs/job-state"
+        return f"printers/{self._id}/jobs/job-state"
 
     @property
     def command_state(self) -> str:
