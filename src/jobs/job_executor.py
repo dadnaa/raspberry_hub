@@ -201,7 +201,7 @@ class JobExecutor:
 
         msg = JobStateMessage(
             jobId=job.job_id, printerId=self._printer_id,
-            fileUrl=job.file_url, status=job.status, progress=job.progress,
+            fileUrl=job.file_url, status=job.mqtt_status, progress=job.progress,
             startedAt=job.started_at, finishedAt=job.finished_at,
             estimatedTime=job.estimated_remaining_display,
             reason=job.failure_reason,

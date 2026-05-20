@@ -264,7 +264,7 @@ class JobManager:
             jobId=job.job_id,
             printerId=self._printer_id,
             fileUrl=job.file_url,
-            status=job.status,
+            status=job.mqtt_status,
             progress=job.progress,
             startedAt=job.started_at,
             finishedAt=job.finished_at,

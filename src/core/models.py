@@ -16,7 +16,7 @@ import json
 # ── Type aliases ──────────────────────────────────────────────────────
 
 PrinterStatus      = Literal["IDLE", "PRINTING", "PAUSED", "OFFLINE"]
-JobStatus          = Literal["QUEUED", "LOADING", "PRINTING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]
+JobStatus          = Literal["QUEUED", "LOADING", "PRINTING", "PAUSED", "COMPLETED", "DONE", "FAILED", "CANCELLED"]
 AIEvent            = Literal["NORMAL", "SPAGHETTI", "LAYER_SHIFT"]
 CommandStateStatus = Literal["QUEUED", "EXECUTING", "SUCCESS", "ERROR"]
 
@@ -91,7 +91,10 @@ class JobStateMessage:
     reason:        Optional[str] = None
 
     def to_json(self) -> str:
-        return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
+        data = asdict(self)
+        if data.get("reason") is None:
+            data.pop("reason", None)
+        return json.dumps(data)
 
     @staticmethod
     def from_json(raw: str) -> "JobStateMessage":

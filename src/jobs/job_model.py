@@ -161,6 +161,13 @@ class Job:
         minutes = total_minutes % 60
         return f"{hours}h {minutes:02d}m"
 
+    @property
+    def mqtt_status(self) -> str:
+        """Status value used in MQTT job-state payloads."""
+        if self.status == "COMPLETED":
+            return "DONE"
+        return self.status
+
     # ------------------------------------------------------------------
     # Serialization (persistence + MQTT)
     # ------------------------------------------------------------------
