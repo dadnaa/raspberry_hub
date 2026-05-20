@@ -14,41 +14,41 @@ class MQTTTopics:
 
     @property
     def handshake(self) -> str:
-        return f"printer/{self._id}/handshake"
+        return f"printers/{self._id}/handshake"
 
     @property
     def printer_state(self) -> str:
-        return f"printer/{self._id}/printer-state"
+        return f"printers/{self._id}/printer-state"
 
     @property
     def job_state(self) -> str:
-        return f"printer/{self._id}/job-state"
+        return "printers/jobs/job-state"
 
     @property
     def command_state(self) -> str:
-        return f"printer/{self._id}/command-state"
+        return f"printers/{self._id}/command-state"
 
     # ── Downstream (subscribe) ────────────────────────────────────────
 
     @property
     def command(self) -> str:
-        return f"printer/{self._id}/command"
+        return f"printers/{self._id}/command"
 
     @property
     def start_job(self) -> str:
-        return f"printer/{self._id}/start-job"
+        return f"printers/{self._id}/start-job"
 
     @property
     def pause_job(self) -> str:
-        return f"printer/{self._id}/pause-job"
+        return f"printers/{self._id}/pause-job"
 
     @property
     def resume_job(self) -> str:
-        return f"printer/{self._id}/resume-job"
+        return f"printers/{self._id}/resume-job"
 
     @property
     def stop_job(self) -> str:
-        return f"printer/{self._id}/stop-job"
+        return f"printers/{self._id}/stop-job"
 
     # ── Helpers ───────────────────────────────────────────────────────
 

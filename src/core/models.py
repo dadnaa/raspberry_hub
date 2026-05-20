@@ -31,7 +31,7 @@ class FramePacket:
 
 @dataclass
 class StartJobMessage:
-    """Mapped to MQTT: printer/{id}/start-job"""
+    """Mapped to MQTT: printers/{id}/start-job"""
     printerId: str
     jobId:     str
     fileUrl:   str
@@ -45,7 +45,7 @@ class StartJobMessage:
 
 @dataclass
 class CommandMessage:
-    """Mapped to MQTT: printer/{id}/command"""
+    """Mapped to MQTT: printers/{id}/command"""
     printerId:   str
     commandName: str
     gcode:       str
@@ -60,7 +60,7 @@ class CommandMessage:
 
 @dataclass
 class PrinterStateMessage:
-    """Mapped to MQTT: printer/{id}/printer-state"""
+    """Mapped to MQTT: printers/{id}/printer-state"""
     printerId:      str
     name:           str
     model:          str
@@ -78,7 +78,7 @@ class PrinterStateMessage:
 
 @dataclass
 class JobStateMessage:
-    """Mapped to MQTT: printer/{id}/job-state"""
+    """Mapped to MQTT: printers/jobs/job-state"""
     jobId:         str
     printerId:     str
     fileUrl:       str
@@ -98,7 +98,7 @@ class JobStateMessage:
 
 @dataclass
 class HandshakeMessage:
-    """Mapped to MQTT: printer/{id}/handshake"""
+    """Mapped to MQTT: printers/{id}/handshake"""
     printerId:      str
     name:           str
     model:          str
@@ -113,7 +113,7 @@ class HandshakeMessage:
 
 @dataclass
 class CommandResponseMessage:
-    """Mapped to MQTT: printer/{id}/command-state"""
+    """Mapped to MQTT: printers/{id}/command-state"""
     printerId:   str
     commandName: str
     gcode:       str
@@ -132,7 +132,7 @@ class CommandResponseMessage:
 
 @dataclass
 class PauseJobMessage:
-    """Mapped to MQTT: printer/{id}/pause-job"""
+    """Mapped to MQTT: printers/{id}/pause-job"""
     printerId: str
     jobId:     str
 
@@ -145,7 +145,7 @@ class PauseJobMessage:
 
 @dataclass
 class ResumeJobMessage:
-    """Mapped to MQTT: printer/{id}/resume-job"""
+    """Mapped to MQTT: printers/{id}/resume-job"""
     printerId: str
     jobId:     str
 
@@ -158,7 +158,7 @@ class ResumeJobMessage:
 
 @dataclass
 class StopJobMessage:
-    """Mapped to MQTT: printer/{id}/stop-job"""
+    """Mapped to MQTT: printers/{id}/stop-job"""
     printerId: str
     jobId:     str
     reason:    Optional[str] = None

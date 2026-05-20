@@ -6,10 +6,10 @@ Every method takes a model instance and publishes to the correct topic.
 Timestamps are injected here, not in the model constructors.
 
 Topics published:
-  printer/{id}/handshake
-  printer/{id}/printer-state
-  printer/{id}/job-state
-  printer/{id}/command-state
+  printers/{id}/handshake
+  printers/{id}/printer-state
+  printers/jobs/job-state
+  printers/{id}/command-state
 """
 
 import logging
