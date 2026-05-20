@@ -64,11 +64,11 @@ class MQTTClient:
     """
 
     def __init__(self) -> None:
-        self._host      = os.environ[MQTT_HOST_ENV]
+        self._host      = os.getenv(MQTT_HOST_ENV)
         self._port      = int(os.environ.get(MQTT_PORT_ENV, str(MQTT_DEFAULT_PORT)))
-        self._username  = os.environ[MQTT_USERNAME_ENV]
-        self._password  = os.environ[MQTT_PASSWORD_ENV]
-        self.printer_id = os.environ[MQTT_PRINTER_ID_ENV]
+        self._username  = os.getenv(MQTT_USERNAME_ENV)
+        self._password  = os.getenv(MQTT_PASSWORD_ENV)
+        self.printer_id = os.getenv(MQTT_PRINTER_ID_ENV)
 
         self._client: paho.Client              = self._build_client()
         self._connected                         = threading.Event()

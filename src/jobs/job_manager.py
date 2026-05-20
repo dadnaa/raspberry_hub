@@ -158,7 +158,18 @@ class JobManager:
 
         logger.warning(f"[JobManager] cancel({job_id!r}) — job not found.")
         return False
-
+    
+    def fail(self, job_id: str, reason: str) -> bool:
+      """Fail the active job. Returns True if successful."""
+      with self._lock:
+          if not self._active or self._active.job_id != job_id:
+              logger.warning(f"[JobManager] fail({job_id!r}) - not the active job.")
+              return False
+          if self._executor:
+              self._executor.fail(reason)
+              logger.warning(f"[JobManager] Active job failed: {job_id} - {reason}")
+              return True
+      return False
     def recover(self) -> int:
         """Called at startup. Loads all persisted jobs and re-queues resumable ones.
         Uses persisted gcode_lines directly — never re-fetches from URL."""

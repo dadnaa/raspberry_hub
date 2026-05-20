@@ -1,1 +1,11 @@
 .env
+setting.py
+/.git
+/.pytest_cache
+/data
+/logs
+__pycache__/
+*.pyc
+logs/
+data/jobs/
+*.log

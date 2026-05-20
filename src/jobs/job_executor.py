@@ -82,7 +82,14 @@ class JobExecutor:
         if not self._job.is_terminal:
             self._job.mark_cancelled()
             self._persist_and_publish()
-
+    def fail(self, reason: str) -> None:
+      self._cancel_event.set()
+      self._pause_event.clear()
+      if not self._job.is_terminal:
+          self._safe_stop()
+          self._job.mark_failed(reason=reason)
+          self._persist_and_publish()
+          self._fire_finished()
     @property
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())

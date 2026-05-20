@@ -74,28 +74,25 @@ class AIInferenceResult:
 
 
 def _build_multipart(jpeg_bytes: bytes, metadata: dict) -> tuple[bytes, str]:
-    """
-    Build a minimal multipart/form-data body.
-    Returns (body_bytes, content_type_header_value).
-    """
-    boundary = b"------VisionBoundary7f3a9b"
+    boundary = b"VisionBoundary7f3a9b"          # no leading dashes
+    delimiter = b"--" + boundary                # standard: "--" prefix in body
+
     meta_str = json.dumps(metadata).encode()
 
     parts = [
-        boundary + b"\r\n",
+        delimiter + b"\r\n",
         b'Content-Disposition: form-data; name="metadata"\r\n',
         b"Content-Type: application/json\r\n\r\n",
         meta_str + b"\r\n",
-        boundary + b"\r\n",
+        delimiter + b"\r\n",
         b'Content-Disposition: form-data; name="image"; filename="frame.jpg"\r\n',
         b"Content-Type: image/jpeg\r\n\r\n",
         jpeg_bytes + b"\r\n",
-        boundary + b"--\r\n",
+        delimiter + b"--\r\n",                  # closing delimiter
     ]
     body = b"".join(parts)
-    content_type = f"multipart/form-data; boundary={boundary.decode().lstrip('-')}"
+    content_type = f"multipart/form-data; boundary={boundary.decode()}"
     return body, content_type
-
 
 class AIClient:
     """
