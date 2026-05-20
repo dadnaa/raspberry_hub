@@ -73,6 +73,7 @@ class MessageValidator:
         self._verify_printer_id(data)
         return StartJobMessage(
             printerId=data["printerId"],
+            commandName=data["commandName"],
             jobId=data["jobId"],
             fileUrl=data["fileUrl"],
         )

@@ -93,7 +93,7 @@ MQTT_ALLOWED_GCODE_PREFIXES = (
     "M25", "M24",
 )
 MQTT_REQUIRED_COMMAND_FIELDS = {"printerId", "commandName", "gcode"}
-MQTT_REQUIRED_START_JOB_FIELDS = {"printerId", "jobId", "fileUrl"}
+MQTT_REQUIRED_START_JOB_FIELDS = {"printerId", "commandName", "jobId", "fileUrl"}
 
 
 # Jobs

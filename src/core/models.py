@@ -32,9 +32,10 @@ class FramePacket:
 @dataclass
 class StartJobMessage:
     """Mapped to MQTT: printers/{id}/start-job"""
-    printerId: str
-    jobId:     str
-    fileUrl:   str
+    printerId:    str
+    commandName:  str
+    jobId:        str
+    fileUrl:      str
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
