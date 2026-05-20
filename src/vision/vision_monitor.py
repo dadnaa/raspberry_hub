@@ -182,9 +182,9 @@ class VisionMonitor:
                     logger.warning(f"[Vision] fail() returned False for job {job.job_id!r}.")
 
             except Exception:
-                logger.exception("[Vision] JobManager pause failed.")
+                logger.exception("[Vision] JobManager fail failed.")
 
-            # IMPORTANT: stop synchronously (no thread race)
+            # IMPORTANT: stop synchronously after terminal failure state is requested.
             self.stop_monitoring()
 
     # ------------------------------------------------------------------

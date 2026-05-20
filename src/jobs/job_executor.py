@@ -50,6 +50,8 @@ class JobExecutor:
 
         self._pause_event  = threading.Event()
         self._cancel_event = threading.Event()
+        self._fail_event   = threading.Event()
+        self._fail_reason: Optional[str] = None
         self._thread:      Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -57,6 +59,8 @@ class JobExecutor:
             return
         self._cancel_event.clear()
         self._pause_event.clear()
+        self._fail_event.clear()
+        self._fail_reason = None
         self._thread = threading.Thread(
             target=self._stream_loop,
             name=f"JobExec-{self._job.job_id[:8]}",
@@ -79,23 +83,26 @@ class JobExecutor:
     def cancel(self) -> None:
         self._cancel_event.set()
         self._pause_event.clear()
+        self._fail_event.clear()
         if not self._job.is_terminal:
             self._job.mark_cancelled()
             self._persist_and_publish()
+
     def fail(self, reason: str) -> None:
-      self._cancel_event.set()
-      self._pause_event.clear()
-      if not self._job.is_terminal:
-          self._safe_stop()
-          self._job.mark_failed(reason=reason)
-          self._persist_and_publish()
-          self._fire_finished()
+        self._fail_reason = reason
+        self._fail_event.set()
+        self._pause_event.clear()
+
     @property
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
     def _stream_loop(self) -> None:
         job = self._job
+        if self._fail_event.is_set():
+            self._fail_job()
+            return
+
         if self._cancel_event.is_set() or job.status == "CANCELLED":
             job.mark_cancelled()
             self._persist_and_publish(); self._fire_finished(); return
@@ -105,12 +112,20 @@ class JobExecutor:
 
         try:
             while job.current_line_index < job.total_lines:
+                if self._fail_event.is_set():
+                    self._fail_job()
+                    return
+
                 if self._cancel_event.is_set():
                     self._safe_stop(); job.mark_cancelled()
                     self._persist_and_publish(); self._fire_finished(); return
 
                 if self._pause_event.is_set():
                     self._do_pause()
+                    if self._fail_event.is_set():
+                        self._fail_job()
+                        return
+
                     if self._cancel_event.is_set():
                         self._safe_stop(); job.mark_cancelled()
                         self._persist_and_publish(); self._fire_finished(); return
@@ -135,7 +150,9 @@ class JobExecutor:
                 self._persist_and_publish()
                 time.sleep(_COMMAND_YIELD_SEC)
 
-            if not self._cancel_event.is_set():
+            if self._fail_event.is_set():
+                self._fail_job()
+            elif not self._cancel_event.is_set():
                 job.mark_completed()
                 self._persist_and_publish(); self._fire_finished()
 
@@ -150,13 +167,26 @@ class JobExecutor:
         except Exception: pass
         job.mark_paused()
         self._persist_and_publish()
-        while self._pause_event.is_set() and not self._cancel_event.is_set():
+        while (
+            self._pause_event.is_set()
+            and not self._cancel_event.is_set()
+            and not self._fail_event.is_set()
+        ):
             time.sleep(_PAUSE_POLL_INTERVAL)
-        if not self._cancel_event.is_set():
+        if not self._cancel_event.is_set() and not self._fail_event.is_set():
             try: self._engine.send("M24")
             except Exception: pass
             job.mark_printing()
             self._persist_and_publish()
+
+    def _fail_job(self) -> None:
+        if self._job.is_terminal:
+            return
+
+        self._safe_stop()
+        self._job.mark_failed(reason=self._fail_reason or "Job failed")
+        self._persist_and_publish()
+        self._fire_finished()
 
     def _safe_stop(self) -> None:
         for cmd in ("M25", "M104 S0", "M140 S0", "M84"):
@@ -172,6 +202,7 @@ class JobExecutor:
             jobId=job.job_id, printerId=self._printer_id,
             fileUrl=job.file_url, status=job.status, progress=job.progress,
             startedAt=job.started_at, finishedAt=job.finished_at, estimatedTime=0,
+            reason=job.failure_reason,
         )
         try: self._publish(msg)
         except Exception: logger.exception("[Executor] Publish failed.")
