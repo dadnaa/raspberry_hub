@@ -154,7 +154,8 @@ class JobExecutor:
                 self._fail_job()
             elif not self._cancel_event.is_set():
                 job.mark_completed()
-                self._persist_and_publish(); self._fire_finished()
+                self._fire_finished()
+                self._persist_and_publish()
 
         except Exception as exc:
             logger.exception(f"[Executor] Unexpected: {exc}")

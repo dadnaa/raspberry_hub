@@ -93,14 +93,14 @@ def main():
 
     # ── 4. Telemetry engine — receives router.telemetry_queue ─────────
     #    Every line the router reads is copied here automatically.
-    telemetry = TelemetryEngine(
-        line_queue=router.telemetry_queue,   # ← fed by SerialRouter
-        state_manager=state_manager,
-    )
-
     # ── 5. Command engine — receives router.ack_queue ─────────────────
     #    PrinterCommunicator reads acks from queue, never from read_line().
     command_engine = CommandEngine(connection, router=router)
+    telemetry = TelemetryEngine(
+        line_queue=router.telemetry_queue,
+        state_manager=state_manager,
+        command_sender=command_engine.send_fire_and_forget,
+    )
     #
     # NOTE: CommandEngine.__init__ must be updated to accept `router`:
     #
@@ -139,8 +139,8 @@ def main():
 
     # ── 8. Start all layers in dependency order ───────────────────────
     # router already started (step 2)
-    telemetry.start()
     command_engine.start()
+    telemetry.start()
     bridge.start()
     # Vision activates automatically when a job transitions to PRINTING
 

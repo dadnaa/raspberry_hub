@@ -30,7 +30,12 @@ import queue
 import time
 from typing import Callable, Optional
 
-from config.settings import TELEMETRY_IDLE_TIMEOUT_SEC, TELEMETRY_STOP_TIMEOUT_SEC
+from config.settings import (
+    TELEMETRY_IDLE_TIMEOUT_SEC,
+    TELEMETRY_POLL_COMMANDS,
+    TELEMETRY_POLL_INTERVAL_SEC,
+    TELEMETRY_STOP_TIMEOUT_SEC,
+)
 from src.telemetry.printer_state import PrinterStatus
 from src.telemetry.state_manager  import StateManager
 from src.telemetry.telemetry_event import TelemetryEvent
@@ -43,6 +48,8 @@ _REBOOT_PROBE_DELAY_SEC = 3.0
 _PROBE_SETTLE_SEC       = 0.5
 _PROBE_BOOT_SEC         = 0.3
 _PROBE_CMD_GAP_SEC      = 0.1
+_POLL_INTERVAL_SEC      = TELEMETRY_POLL_INTERVAL_SEC
+_POLL_COMMANDS          = tuple(TELEMETRY_POLL_COMMANDS)
 
 
 class TelemetryEngine:
@@ -71,14 +78,17 @@ class TelemetryEngine:
         line_queue:    queue.Queue,
         state_manager: StateManager,
         on_event:      Optional[Callable[[TelemetryEvent], None]] = None,
+        command_sender: Optional[Callable[[str], bool]] = None,
         write_fn:      Optional[Callable[[str], None]] = None,
     ) -> None:
         self._q             = line_queue
         self._state         = state_manager
         self._on_event      = on_event
+        self._command_sender = command_sender
         self._write_fn      = write_fn
         self._stop_event    = threading.Event()
         self._thread:       Optional[threading.Thread] = None
+        self._poll_thread:  Optional[threading.Thread] = None
         self._last_line_ts: float = 0.0
 
         self._state.register_listener(self._on_state_change)
@@ -98,10 +108,13 @@ class TelemetryEngine:
             daemon=True,
         )
         self._thread.start()
+        self._start_polling()
         logger.info("[Telemetry] Engine started.")
 
     def stop(self, timeout: float = TELEMETRY_STOP_TIMEOUT_SEC) -> None:
         self._stop_event.set()
+        if self._poll_thread:
+            self._poll_thread.join(timeout=timeout)
         if self._thread:
             self._thread.join(timeout=timeout)
         logger.info("[Telemetry] Engine stopped.")
@@ -109,6 +122,50 @@ class TelemetryEngine:
     @property
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
+
+    def set_command_sender(self, command_sender: Optional[Callable[[str], bool]]) -> None:
+        """Set or replace the queued command sender used for telemetry polling."""
+        self._command_sender = command_sender
+
+    # ------------------------------------------------------------------
+    # Active telemetry polling
+    # ------------------------------------------------------------------
+
+    def _start_polling(self) -> None:
+        if not self._command_sender:
+            logger.info("[Telemetry] Active polling disabled (no command_sender).")
+            return
+        if self._poll_thread and self._poll_thread.is_alive():
+            return
+
+        self._poll_thread = threading.Thread(
+            target=self._poll_loop,
+            name="TelemetryPoller",
+            daemon=True,
+        )
+        self._poll_thread.start()
+        logger.info(
+            "[Telemetry] Active polling started: commands=%s interval=%.1fs",
+            ",".join(_POLL_COMMANDS),
+            _POLL_INTERVAL_SEC,
+        )
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.wait(_POLL_INTERVAL_SEC):
+            sender = self._command_sender
+            if not sender:
+                continue
+
+            for command in _POLL_COMMANDS:
+                if self._stop_event.is_set():
+                    return
+                try:
+                    queued = sender(command)
+                    if not queued:
+                        logger.debug("[Telemetry] Poll command rejected: %s", command)
+                except Exception:
+                    logger.exception("[Telemetry] Poll command failed: %s", command)
+                self._stop_event.wait(_PROBE_CMD_GAP_SEC)
 
     # ------------------------------------------------------------------
     # Connection probing (call once after serial port opens)
