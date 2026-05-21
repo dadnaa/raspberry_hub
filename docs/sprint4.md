@@ -1,123 +1,80 @@
-# Sprint 4 — MQTT Cloud Bridge
+# Sprint 4 - MQTT Cloud Bridge
 
-## New Files
+Sprint 4 adds cloud communication. In the current project the cloud package is `src/cloud`.
 
-```
-src/
-├── core/
-│   └── models.py               # Updated: +CommandResponseMessage, +CommandStateStatus
-└── mqtt/
-    ├── __init__.py
-    ├── mqtt_topics.py           # Single source of truth for all topic strings
-    ├── mqtt_client.py           # HiveMQ connection, reconnect, buffered publish
-    ├── mqtt_publisher.py        # Typed upstream publish facade
-    ├── message_validator.py     # Payload validation + gcode whitelist
-    ├── command_router.py        # Lifecycle routing + feedback publisher
-    └── mqtt_bridge.py           # Top-level orchestrator
+## Current Implementation
 
-config/
-    .env.example                 # Credential template
+`MQTTClient` manages the HiveMQ connection using TLS, MQTT v5, reconnect backoff, subscriptions, and an offline outbox. `MQTTBridge` owns the client, topic contract, publisher, validator, command router, and job manager.
 
-tests/
-    test_sprint4_mqtt.py         # Full unit test suite
-requirements.txt                 # paho-mqtt, python-dotenv
-```
+Incoming direct commands are validated by `MessageValidator`, then routed by `CommandRouter` into `CommandEngine`. The router publishes command lifecycle messages before and after execution.
 
----
+Printer state publishing is driven by `StateManager` listener callbacks and a periodic heartbeat in `MQTTBridge`.
 
-## Architecture
+## Files
 
-```
-HiveMQ Cloud
-    │  TLS/8883
-    │
-┌───▼──────────────────────────────────────────────────┐
-│  MQTTClient  (mqtt_client.py)                        │
-│  • reconnect loop + exponential backoff              │
-│  • outbox buffer (256 msgs) while offline            │
-│  • drain on reconnect                                │
-└───┬──────────────────────────────────────────────────┘
-    │
-┌───▼──────────────────────────────────────────────────┐
-│  MQTTBridge  (mqtt_bridge.py)                        │
-│  • dispatches incoming to CommandRouter              │
-│  • sends handshake on (re)connect                    │
-│  • heartbeat: re-publishes printer-state every 10s   │
-│  • hooks into StateManager.register_listener()       │
-└───┬──────────────────────────┬───────────────────────┘
-    │ publish                  │ subscribe
-    │                          │
-┌───▼───────────┐    ┌─────────▼──────────────────────┐
-│ MQTTPublisher │    │  CommandRouter                 │
-│ • handshake   │    │  1. MessageValidator            │
-│ • printer-state│   │  2. Publish QUEUED              │
-│ • job-state   │    │  3. Publish EXECUTING           │
-│ • command-state│   │  4. CommandEngine.send(gcode)   │
-└───────────────┘    │  5. Publish SUCCESS / ERROR     │
-                     └─────────┬──────────────────────┘
-                               │ .send(gcode)
-                     ┌─────────▼──────────────────────┐
-                     │  CommandEngine  (Sprint 2)      │
-                     │  → SerialConnection             │
-                     │  → Printer (physical)           │
-                     └────────────────────────────────┘
+```text
+src/cloud/
+  mqtt_client.py
+  mqtt_topics.py
+  mqtt_publisher.py
+  message_validator.py
+  command_router.py
+  mqtt_bridge.py
+
+src/core/models.py
+tests/test_sprint4.py
 ```
 
----
+## Actual Topic Contract
 
-## Topic Contract
+| Direction | Topic |
+| --- | --- |
+| Pi to cloud | `printers/{id}/handshake` |
+| Pi to cloud | `printers/{id}/printer-state` |
+| Pi to cloud | `printers/{id}/jobs/job-state` |
+| Pi to cloud | `printers/{id}/command-state` |
+| Cloud to Pi | `printers/{id}/command` |
+| Cloud to Pi | `printers/{id}/start-job` |
+| Cloud to Pi | `printers/{id}/pause-job` |
+| Cloud to Pi | `printers/{id}/resume-job` |
+| Cloud to Pi | `printers/{id}/stop-job` |
 
-| Direction | Topic | Model |
-|-----------|-------|-------|
-| Pi → Cloud | `printer/{id}/handshake` | `HandshakeMessage` |
-| Pi → Cloud | `printer/{id}/printer-state` | `PrinterStateMessage` |
-| Pi → Cloud | `printer/{id}/job-state` | `JobStateMessage` |
-| Pi → Cloud | `printer/{id}/command-state` | `CommandResponseMessage` |
-| Cloud → Pi | `printer/{id}/command` | `CommandMessage` |
-| Cloud → Pi | `printer/{id}/start-job` | `StartJobMessage` |
+## Direct Command Lifecycle
 
----
-
-## Command Lifecycle
-
-Every cloud command produces exactly **3 publishes** to `command-state`:
-
+```text
+Cloud publishes printers/{id}/command
+  |
+  v
+MQTTClient -> MQTTBridge
+  |
+  v
+CommandRouter
+  |
+  +--> publish command-state QUEUED
+  +--> publish command-state EXECUTING
+  +--> CommandEngine.send(gcode)
+  +--> publish command-state SUCCESS or ERROR
 ```
-Cloud sends:  { commandName: "SetTemp", gcode: "M104 S210", ... }
 
-Pi publishes: { status: "QUEUED",    gcode: "M104 S210", timestamp: "..." }
-Pi publishes: { status: "EXECUTING", gcode: "M104 S210", timestamp: "..." }
-Pi publishes: { status: "SUCCESS",   gcode: "M104 S210", timestamp: "..." }
-          or: { status: "ERROR",     gcode: "M104 S210", reason: "...", timestamp: "..." }
+## Environment Variables
+
+```text
+MQTT_HOST
+MQTT_PORT
+MQTT_USERNAME
+MQTT_PASSWORD
+MQTT_PRINTER_ID
 ```
 
----
+## Current Design Notes
 
-## Network Resilience
+- MQTT never writes to serial directly.
+- `MessageValidator` enforces printer ID matching and a G-code whitelist for direct commands.
+- `MQTTBridge.start()` subscribes to all downstream topics and sends a retained handshake after connection.
+- The bridge owns `JobManager`, so Sprint 5 job controls are now part of the same MQTT bridge.
 
-- Printer control never depends on MQTT (Sprint 2 command engine is unaffected)
-- Outbox buffers up to 256 messages while offline
-- Drained automatically on reconnect
-- Reconnect uses exponential backoff: 2s → 4s → 8s … → 60s cap
-
----
-
-## Setup
+## Useful Commands
 
 ```bash
-pip install -r requirements.txt
-cp config/.env.example config/.env
-# Edit config/.env with your HiveMQ credentials
-
-# Load env vars (or use python-dotenv in main.py)
-export $(cat config/.env | xargs)
-python main.py
+python -m pytest tests/test_sprint4.py -v
 ```
-
----
-
-## Sprint 5 Preview
-
-- Job file download + G-code execution pipeline
-- `JobStateMessage` publishing throughout job lifecycle
-- `start-job` handler fully implemented

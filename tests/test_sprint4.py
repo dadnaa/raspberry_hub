@@ -40,14 +40,14 @@ class TestMQTTTopics(unittest.TestCase):
         self.t = MQTTTopics(PRINTER_ID)
 
     def test_upstream_topics(self):
-        self.assertEqual(self.t.handshake,     f"printer/{PRINTER_ID}/handshake")
-        self.assertEqual(self.t.printer_state, f"printer/{PRINTER_ID}/printer-state")
-        self.assertEqual(self.t.job_state,     f"printer/{PRINTER_ID}/job-state")
-        self.assertEqual(self.t.command_state, f"printer/{PRINTER_ID}/command-state")
+        self.assertEqual(self.t.handshake,     f"printers/{PRINTER_ID}/handshake")
+        self.assertEqual(self.t.printer_state, f"printers/{PRINTER_ID}/printer-state")
+        self.assertEqual(self.t.job_state,     f"printers/{PRINTER_ID}/jobs/job-state")
+        self.assertEqual(self.t.command_state, f"printers/{PRINTER_ID}/command-state")
 
     def test_downstream_topics(self):
-        self.assertEqual(self.t.command,   f"printer/{PRINTER_ID}/command")
-        self.assertEqual(self.t.start_job, f"printer/{PRINTER_ID}/start-job")
+        self.assertEqual(self.t.command,   f"printers/{PRINTER_ID}/command")
+        self.assertEqual(self.t.start_job, f"printers/{PRINTER_ID}/start-job")
 
     def test_all_subscriptions(self):
         subs = self.t.all_subscriptions
@@ -125,10 +125,12 @@ class TestMessageValidator(unittest.TestCase):
     def test_valid_start_job(self):
         payload = json.dumps({
             "printerId": PRINTER_ID,
+            "commandName": "StartJob",
             "jobId":     "job-42",
             "fileUrl":   "https://example.com/file.gcode",
         })
         job = self.val.parse_start_job(payload)
+        self.assertEqual(job.commandName, "StartJob")
         self.assertEqual(job.jobId, "job-42")
 
     def test_start_job_missing_field(self):
@@ -324,6 +326,25 @@ class TestCommandResponseMessage(unittest.TestCase):
         restored = CommandResponseMessage.from_json(msg.to_json())
         self.assertEqual(restored.status, "SUCCESS")
         self.assertEqual(restored.timestamp, "2026-01-01T00:00:00+00:00")
+
+
+class TestJobStateMessage(unittest.TestCase):
+
+    def test_to_json_keeps_finished_at_when_null(self):
+        msg = JobStateMessage(
+            jobId="job-1",
+            printerId="p1",
+            fileUrl="file.gcode",
+            status="PRINTING",
+            progress=0.21,
+            startedAt="2026-05-20T09:46:38.193891+00:00",
+            finishedAt=None,
+            estimatedTime="0h 00m",
+        )
+        payload = json.loads(msg.to_json())
+        self.assertIn("finishedAt", payload)
+        self.assertIsNone(payload["finishedAt"])
+        self.assertNotIn("reason", payload)
 
 
 if __name__ == "__main__":

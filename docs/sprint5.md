@@ -1,115 +1,85 @@
-# Sprint 5 — Job Management + G-code Streaming Engine
+# Sprint 5 - Job Management and G-code Streaming
 
-## New Files
+Sprint 5 adds persistent print jobs, G-code loading, FIFO scheduling, and job control through MQTT.
 
-```
-src/
-├── core/
-│   └── models.py                  # +PauseJobMessage, ResumeJobMessage, StopJobMessage
-│                                  # +JobStatus: LOADING added
-└── jobs/
-    ├── __init__.py
-    ├── job_model.py               # Job entity, state transitions, serialization
-    ├── gcode_pipeline.py          # Load from file/URL, parse, clean, normalize
-    ├── job_store.py               # Persist jobs to data/jobs/<id>.json
-    ├── job_executor.py            # Stream G-code through CommandEngine, pause/resume/cancel
-    └── job_manager.py             # FIFO queue, single-active-job, recovery
+## Current Implementation
 
-src/mqtt/
-    ├── mqtt_topics.py             # +pause-job, resume-job, stop-job
-    └── mqtt_bridge.py             # +job control dispatch, recovery on start
+Jobs are managed by `JobManager`, which is owned by `MQTTBridge` unless injected for tests. The manager accepts `StartJobMessage`, loads the referenced G-code, creates a persistable `Job`, and starts it immediately if no job is active. Otherwise it queues the job FIFO.
 
-data/jobs/                         # Persistent job state (JSON files)
-tests/
-    test_sprint5_jobs.py           # Full test suite
-```
+`JobExecutor` streams executable G-code lines through `CommandEngine.send()`. After each line it updates progress, persists the job, publishes job state, and notifies the optional state listener used by vision.
 
----
+## Files
 
-## Architecture
+```text
+src/jobs/
+  gcode_pipeline.py
+  job_model.py
+  job_store.py
+  job_executor.py
+  job_manager.py
 
-```
-MQTT Cloud
-    │
-    │  start-job / pause-job / resume-job / stop-job
-    ▼
-MQTTBridge  (mqtt_bridge.py)
-    │
-    ▼
-JobManager  (job_manager.py)
-    │  FIFO queue — only 1 active job per printer
-    │
-    ▼
-JobExecutor  (job_executor.py)
-    │  streams line-by-line
-    │  pause() / resume() / cancel() from any thread
-    ▼
-CommandEngine  (Sprint 2)
-    │  .send(gcode) → waits for "ok"
-    ▼
-SerialConnection → Printer
+src/cloud/mqtt_bridge.py
+src/cloud/mqtt_topics.py
+src/core/models.py
+tests/test_sprint5.py
 ```
 
----
+## Job Flow
+
+```text
+printers/{id}/start-job
+  |
+  v
+MQTTBridge
+  |
+  v
+JobManager.submit()
+  |
+  v
+gcode_pipeline.load(fileUrl)
+  |
+  v
+JobStore.save(job)
+  |
+  v
+JobExecutor
+  |
+  v
+CommandEngine.send(each line)
+```
 
 ## Job Lifecycle
 
-```
-QUEUED
-  │
-  └─► LOADING (G-code being fetched/parsed)
-         │
-         └─► PRINTING ──────────────────┐
-                │                       │
-                │◄──── pause() ─────────┤
-                ▼                       │
-              PAUSED                    │
-                │                       │
-                └──── resume() ─────────┘
-                │
-                ├─► COMPLETED  (all lines executed)
-                ├─► FAILED     (printer rejected a line / exception)
-                └─► CANCELLED  (stop-job received)
+```text
+QUEUED -> PRINTING -> COMPLETED
+                 |-> PAUSED -> PRINTING
+                 |-> FAILED
+                 |-> CANCELLED
 ```
 
----
+The internal completed state is `COMPLETED`; MQTT job-state publishes it as `DONE`.
 
-## New MQTT Topics (Sprint 5)
+## Job Controls
 
-| Direction | Topic | Model |
-|-----------|-------|-------|
-| Cloud → Pi | `printer/{id}/pause-job`  | `PauseJobMessage`  |
-| Cloud → Pi | `printer/{id}/resume-job` | `ResumeJobMessage` |
-| Cloud → Pi | `printer/{id}/stop-job`   | `StopJobMessage`   |
+| MQTT topic | Manager method | Behavior |
+| --- | --- | --- |
+| `printers/{id}/start-job` | `submit()` | Load G-code and start or queue the job. |
+| `printers/{id}/pause-job` | `pause()` | Pause the active job and send `M25`. |
+| `printers/{id}/resume-job` | `resume()` | Resume the active job and send `M24`. |
+| `printers/{id}/stop-job` | `cancel()` | Cancel active or queued job. Active cancel sends safe stop commands. |
 
-All existing Sprint 4 topics unchanged.
+`JobManager.fail(job_id, reason)` is also available internally and is used by the vision system.
 
----
+## Persistence and Recovery
 
-## Crash Recovery
+`JobStore` persists jobs as JSON under `data/jobs`. `MQTTBridge.start()` calls `JobManager.recover()`, which reloads jobs in `PRINTING`, `PAUSED`, `QUEUED`, or `LOADING`, resets them to `QUEUED`, and restarts execution in FIFO order. Persisted G-code is reused when available; otherwise recovery attempts to reload from the original file URL.
 
-On startup, `MQTTBridge.start()` calls `JobManager.recover()`:
+## G-code Pipeline
 
-1. Loads all JSON files from `data/jobs/`
-2. Finds jobs in `PRINTING`, `PAUSED`, `QUEUED`, or `LOADING` state
-3. Re-queues them FIFO by `created_at`
-4. Resumes execution from `current_line_index` — no lines are re-sent
+`gcode_pipeline.py` supports local paths and `http://` or `https://` URLs. It strips empty lines, full-line comments, inline comments, and `%` markers, then returns executable lines starting with `G`, `M`, `T`, or `N`.
 
----
+## Useful Commands
 
-## Safety Rules (Enforced)
-
-- `JobExecutor` is the **only** entity that calls `CommandEngine.send()`
-  for job G-code — never the bridge or manager directly
-- One `JobExecutor` per printer at all times
-- Cancel sends `M25, M104 S0, M140 S0, M84` (safe stop sequence)
-- `JobStore` uses atomic rename (`tmp → final`) on every write
-
----
-
-## Sprint 6 Preview
-
-Vision-Based Failure Detection:
-- AI monitors camera feed during `PRINTING`
-- On `SPAGHETTI` or `LAYER_SHIFT` detection → `job_manager.cancel()`
-- `FailureDetectionState` + `AIResult` models already in `models.py`
+```bash
+python -m pytest tests/test_sprint5.py -v
+```

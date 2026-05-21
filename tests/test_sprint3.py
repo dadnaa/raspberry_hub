@@ -25,6 +25,7 @@ from src.telemetry.telemetry_parser import (
 from src.telemetry.state_manager import StateManager
 from src.telemetry.printer_state import PrinterStatus
 from src.telemetry.telemetry_engine import TelemetryEngine
+import src.telemetry.telemetry_engine as telemetry_engine
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -237,6 +238,28 @@ class TestTelemetryEngine(unittest.TestCase):
         noise = ["", "   ", "!!garbage!!", "ok", "echo: busy: processing"]
         self._push_and_wait(q, noise)
         eng.stop()  # must not raise
+
+    def test_active_polling_queues_state_commands(self):
+        old_interval = telemetry_engine._POLL_INTERVAL_SEC
+        telemetry_engine._POLL_INTERVAL_SEC = 0.05
+        sent = []
+        q = queue.Queue()
+        mgr = StateManager()
+        eng = TelemetryEngine(
+            line_queue=q,
+            state_manager=mgr,
+            command_sender=lambda command: sent.append(command) or True,
+        )
+
+        try:
+            eng.start()
+            time.sleep(0.2)
+            eng.stop()
+        finally:
+            telemetry_engine._POLL_INTERVAL_SEC = old_interval
+
+        self.assertIn("M105", sent)
+        self.assertIn("M114", sent)
 
 
 if __name__ == "__main__":

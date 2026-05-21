@@ -1,87 +1,65 @@
-# Sprint 3 — Telemetry + State Intelligence Layer
+# Sprint 3 - Telemetry and State
 
-## New Files
+Sprint 3 adds continuous printer state observation. The current implementation lives in `src/telemetry` and is wired through `SerialRouter.telemetry_queue`.
 
-```
+## Current Implementation
+
+`SerialRouter` sends every decoded serial line to `telemetry_queue`. `TelemetryEngine` consumes that queue, parses Marlin output, and updates `StateManager`.
+
+`StateManager` is the thread-safe single source of truth for printer state. It stores a `PrinterStateSnapshot`, returns deep-copied snapshots to readers, and notifies registered listeners when fields change.
+
+Telemetry also actively polls the printer. `TelemetryEngine` periodically queues configured polling commands, currently `M105` and `M114`, using `CommandEngine.send_fire_and_forget()`. This keeps polling inside the normal command queue instead of writing directly to serial.
+
+## Files
+
+```text
 src/telemetry/
-├── __init__.py            # Public exports
-├── printer_state.py       # PrinterStateSnapshot + PrinterStatus enum
-├── state_manager.py       # Thread-safe single source of truth
-├── telemetry_parser.py    # Pure regex parsers (temp, pos, progress, status)
-├── telemetry_engine.py    # Background thread reader + line dispatcher
-└── telemetry_event.py     # TelemetryEvent envelope (for Sprint 4 MQTT)
+  __init__.py
+  printer_state.py
+  state_manager.py
+  telemetry_parser.py
+  telemetry_engine.py
+  telemetry_event.py
 
-tests/
-└── test_sprint3_telemetry.py   # Full unit test suite
+tests/test_sprint3.py
 ```
 
----
+## Parsed Signals
 
-## Architecture: Two Planes
+| Signal | Source |
+| --- | --- |
+| Nozzle and bed temperature | `T:` / `B:` lines |
+| Temperature targets | Marlin target fragments such as `/200.0` |
+| XYZ position | `M114` style `X:... Y:... Z:...` lines |
+| Print progress | `SD printing byte x/y` |
+| Print complete | `Done printing file` |
+| Pause/resume | `// action:pause` and `// action:resume` |
+| Reboot | Marlin boot/startup markers |
 
-```
-SerialConnection
-      │
-      ├──► line_queue (Queue) ──► TelemetryEngine  ──► StateManager
-      │                            (observes)           (state)
-      │
-      └──► CommandEngine
-            (controls)
-```
+## State Flow
 
-The `SerialConnection` must push every decoded line into `line_queue`.
-Command engine reads ACKs via its own mechanism.
-These two never block each other.
-
----
-
-## One Integration Step Required
-
-`SerialConnection` (Sprint 2) needs a `line_queue: queue.Queue` attribute.
-Its reader loop should do:
-
-```python
-import queue
-
-class SerialConnection:
-    def __init__(self):
-        self.line_queue = queue.Queue()
-
-    def _reader_loop(self):
-        while ...:
-            line = self._serial.readline().decode("utf-8", errors="replace")
-            self.line_queue.put(line)   # ← add this
-            # existing command-ack logic continues unchanged
+```text
+SerialRouter.telemetry_queue
+  |
+  v
+TelemetryEngine
+  |
+  v
+StateManager.update(...)
+  |
+  v
+registered listeners, including MQTTBridge
 ```
 
-This is the **only change** needed to Sprint 2 code.
+## Current Design Notes
 
----
+- Telemetry does not read directly from the serial port.
+- Receiving a temperature line while status is `UNKNOWN` or `REBOOTING` moves the printer to `IDLE`.
+- Idle timeout can return active statuses to `IDLE` when no more progress or action lines arrive.
+- The optional `on_event` callback still exists for event-style integrations, but MQTT printer-state publishing currently uses `StateManager.register_listener()`.
 
-## State Fields
+## Useful Commands
 
-| Field            | Type              | Source                     |
-|------------------|-------------------|----------------------------|
-| status           | PrinterStatus     | Pattern detection          |
-| nozzle_temp      | float             | `T:` in serial lines       |
-| nozzle_target    | float             | `T:xxx /yyy`               |
-| bed_temp         | float             | `B:` in serial lines       |
-| bed_target       | float             | `B:xxx /yyy`               |
-| progress_pct     | float 0-100       | `SD printing byte x/y`     |
-| position_x/y/z   | float             | `X:n Y:n Z:n`              |
-| last_updated     | datetime (UTC)    | Every state change         |
-
----
-
-## Sprint 4 Readiness
-
-`TelemetryEngine` accepts an `on_event` callback:
-
-```python
-def mqtt_publish(event: TelemetryEvent):
-    client.publish("printer/telemetry", json.dumps(event.to_dict()))
-
-engine = TelemetryEngine(line_queue, state_manager, on_event=mqtt_publish)
+```bash
+python -m pytest tests/test_sprint3.py -v
 ```
-
-No other changes needed to connect to HiveMQ.

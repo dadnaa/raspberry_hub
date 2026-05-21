@@ -1,92 +1,45 @@
-# Sprint 1 — USB Serial Foundation
+# Sprint 1 - USB Serial Foundation
 
-## Overview
+Sprint 1 provides the physical printer communication layer. In the current project it is implemented by `src/hardware/port_discovery.py`, `src/hardware/serial_connection.py`, and `src/hardware/printer_communicator.py`.
 
-Sprint 1 establishes Layer 1 of the Reactive Edge Hub: the hardware interface.
+## Current Implementation
 
-It implements the complete USB serial communication stack between the Raspberry Pi
-and the Creality 3D printer, enforcing the strict **request → response → "ok"** protocol.
+`SerialConnection` owns the raw USB serial port. It detects likely printer ports, tries the configured Creality baud rates, stabilizes after opening the port, writes ASCII command lines, reads decoded serial lines, flushes buffers, disconnects, and reconnects when needed.
 
----
+`PrinterCommunicator` is the command-level wrapper around the serial connection. It writes one G-code command and waits for an `ok` acknowledgement, retrying on timeout according to `config/settings.py`.
 
-## Folder Structure (Post Sprint 1)
+In the full current stack, `PrinterCommunicator` receives `SerialRouter.ack_queue` and does not read directly from the serial port. Direct reading is still available as a compatibility fallback for isolated tests, but production wiring uses the router to avoid races with telemetry.
 
-```
-reactive-edge-hub/
-├── main.py                          ← Sprint 1 entry point
-├── requirements.txt
-├── config/
-│   └── settings.py                  ← Global constants
-├── logs/                            ← Auto-generated session logs
-├── docs/
-│   └── sprint1.md                   ← This file
-├── tests/
-│   └── test_sprint1.py              ← Unit tests (no hardware needed)
-└── src/
-    ├── hardware/                    ← Layer 1 (Sprint 1)
-    │   ├── port_discovery.py        ← Auto-detect USB port
-    │   ├── serial_connection.py     ← Raw serial open/read/write
-    │   └── printer_communicator.py  ← ok-sync command protocol
-    ├── engine/                      ← Layer 2 (Sprint 2)
-    ├── telemetry/                   ← Layer 3 (Sprint 3)
-    ├── cloud/                       ← Layer 4 (Sprint 4)
-    └── utils/
-        ├── telemetry_parser.py      ← Pure parsing functions
-        └── logger_setup.py          ← Logging config
+## Files
+
+```text
+src/hardware/
+  port_discovery.py
+  serial_connection.py
+  printer_communicator.py
+  serial_router.py            Added later, but now required by production wiring.
+
+src/utils/
+  telemetry_parser.py         Simple helper parsers used by PrinterCommunicator.
+  logger_setup.py
+
+config/settings.py
+tests/test_sprint1.py
 ```
 
----
+## Key Runtime Rules
 
-## How to Run
+- Upper layers do not import or use `pyserial` directly.
+- Raw writes go through `SerialConnection.write_line()`.
+- Production reads are centralized by `SerialRouter`, not by multiple consumers.
+- Reconnects flush stale router queues through the `on_reconnect` hook.
+- Command acknowledgement handling is timeout and retry based.
 
-### 1. Install dependencies
+## Useful Commands
 
 ```bash
-pip install pyserial
-```
-
-### 2. Check your printer is connected
-
-```bash
-ls /dev/ttyUSB* /dev/ttyACM*
-```
-
-### 3. Run Sprint 1
-
-```bash
-python main.py
-```
-
-Logs appear both on console and in `logs/sprint1_<timestamp>.log`.
-
----
-
-## How to Run Tests (No Hardware Required)
-
-```bash
-pip install pytest
+pip install -r requirements.txt
 python -m pytest tests/test_sprint1.py -v
 ```
 
----
-
-## Key Design Decisions
-
-| Decision | Rationale |
-|---|---|
-| No hardcoded port | Portability across machines |
-| Baud rate auto-detection | Handles both 115200 and 250000 Creality variants |
-| 3s stabilization delay | Printer resets on USB connect; avoids reading boot noise |
-| "ok" detected anywhere in line | Marlin sometimes sends `ok T:210 …` combined lines |
-| Retry-on-timeout (×2) | Transient serial noise shouldn't abort the session |
-| Pure parser functions in `utils/` | Reusable across Sprint 1 (inline) and Sprint 3 (continuous) |
-| SerialConnection hides pyserial | Upper layers never import pyserial directly |
-
----
-
-## Sprint 1 → Sprint 2 Handoff
-
-Sprint 2 will introduce the **Command Queue Engine** (Layer 2).
-
-The `PrinterCommunicator.send_command()` method becomes the
-internal executor called by the queue — no changes to Layer 1 required.
+Running `python main.py` starts the full current stack, not a Sprint 1-only demo.

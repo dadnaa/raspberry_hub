@@ -1,120 +1,84 @@
-# Sprint 6 — Vision-Based Failure Detection System
+# Sprint 6 - Vision-Based Failure Detection
 
-## New Files
+Sprint 6 adds job-state-driven vision monitoring. Vision is inactive unless a job is currently printing.
 
-```
+## Current Implementation
+
+`main.py` creates `AIClient`, `VisionEventPublisher`, `VisionMonitor`, and `VisionController`. It registers `VisionController.on_job_state_change` with `bridge.job_manager.set_state_listener()`.
+
+When a job transitions to `PRINTING`, the controller starts the monitor. When the job transitions to `PAUSED`, `COMPLETED`, `FAILED`, or `CANCELLED`, the controller stops the monitor.
+
+## Files
+
+```text
 src/vision/
-├── __init__.py
-├── stream_reader.py          # IP camera (RTSP/HTTP/MJPEG) → single-slot frame buffer
-├── frame_sampler.py          # Timed frame extraction, preprocessing (JPEG 640x480)
-├── ai_client.py              # HTTP multipart POST to AI inference endpoint
-├── failure_guard.py          # False-positive filter: threshold + confidence + cooldown
-├── vision_event_publisher.py # MQTT publish to fleet/{printerId}/vision/events
-├── vision_monitor.py         # Pipeline orchestrator + adaptive rate control
-└── vision_controller.py      # Job-state-driven activation/deactivation hook
+  stream_reader.py
+  frame_sampler.py
+  ai_client.py
+  failure_guard.py
+  vision_event_publisher.py
+  vision_monitor.py
+  vision_controller.py
 
-src/jobs/
-├── job_executor.py           # +state_listener callback (Sprint 6 hook — 1 line change)
-└── job_manager.py            # +set_state_listener() method
+src/jobs/job_executor.py
+src/jobs/job_manager.py
+tests/test_sprint6.py
 ```
 
----
+## Vision Flow
 
-## Architecture
-
-```
-IP Camera (RTSP/HTTP/MJPEG)
-        │
-        ▼
- StreamReader            background thread, single-slot latest frame
-        │  latest_frame
-        ▼
- FrameSampler            ticks every 1.5–5s (adaptive)
-        │  (jpeg_bytes, metadata)
-        ▼
- AIClient                POST multipart/form-data → AI service
-        │  AIInferenceResult {classification, confidence}
-        ▼
- FailureGuard            N consecutive FAILUREs + confidence ≥ threshold + cooldown
-        │  VisionDecision {action: NONE | PAUSE}
-        ▼
- VisionMonitor
-   ├── PAUSE  →  JobManager.pause(job_id)        ← Sprint 5 only
-   └── event  →  VisionEventPublisher  →  MQTT
-                  fleet/{printerId}/vision/events
+```text
+Job state PRINTING
+  |
+  v
+VisionController
+  |
+  v
+VisionMonitor
+  |
+  v
+StreamReader -> FrameSampler -> AIClient -> FailureGuard
+                                      |
+                                      v
+                         publish vision event over MQTT
+                                      |
+                                      v
+                       on intervention: JobManager.fail()
 ```
 
----
+## Components
 
-## Activation (Zero idle processing)
+- `StreamReader` opens the configured camera stream and stores the latest frame.
+- `FrameSampler` samples frames on a timer, encodes JPEG, and attaches metadata.
+- `AIClient` posts each sampled frame to the configured inference endpoint.
+- `FailureGuard` applies consecutive-failure threshold, minimum confidence, and cooldown.
+- `VisionEventPublisher` publishes the decision result.
+- `VisionMonitor` adapts sampling speed and acts on failure decisions.
+- `VisionController` connects job lifecycle changes to monitor start/stop.
 
-```
-JobExecutor._persist_and_publish()
-       │  calls state_listener(job)
-       ▼
-VisionController.on_job_state_change(job)
-       │
-       ├── job.status == "PRINTING"  →  VisionMonitor.start_monitoring(job)
-       └── job.status in terminal    →  VisionMonitor.stop_monitoring()
-```
+## Current Intervention Behavior
 
-Vision is **off** unless a job is actively PRINTING. No frames sampled, no AI calls made.
+The current `VisionMonitor` calls `JobManager.fail(job_id, reason)` when `FailureGuard` returns `Action.PAUSE`. This marks the active job failed through the executor and runs the executor failure path, including safe stop commands. Older docs that say vision only pauses the job are no longer accurate.
 
----
-
-## False Positive Protection
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `failure_threshold` | 3 | Consecutive FAILUREs required |
-| `confidence_min` | 0.75 | Minimum confidence to count a FAILURE |
-| `cooldown_sec` | 30.0 | Seconds between interventions |
-
-A single low-confidence FAILURE or one-off glitch never triggers a pause.
-
----
-
-## Adaptive Sampling Rate
+## Sampling Behavior
 
 | Condition | Interval |
-|---|---|
-| Normal (default) | 3.0 s |
-| After any FAILURE signal | 1.5 s (heightened watch) |
-| After 10 consecutive OKs | 5.0 s (stable print) |
-
----
-
-## MQTT Vision Event
-
-Topic: `fleet/{printerId}/vision/events`
-
-```json
-{
-  "jobId":          "abc-123",
-  "printerId":      "printer-001",
-  "timestamp":      "2026-05-01T12:00:00+00:00",
-  "classification": "FAILURE",
-  "confidence":     0.91,
-  "action":         "PAUSED"
-}
-```
-
-This is **reporting only** — the cloud never acts on it directly.
-
----
+| --- | --- |
+| Normal | `VISION_INTERVAL_NORMAL_SEC` |
+| Failure signal | `VISION_INTERVAL_RISK_SEC` |
+| Stable OK streak | `VISION_INTERVAL_STABLE_SEC` after `VISION_OK_STREAK_FOR_SLOW` OK results |
 
 ## Environment Variables
 
-| Variable | Purpose |
-|---|---|
-| `VISION_CAMERA_URL` | IP camera stream URL (RTSP / HTTP / MJPEG) |
-| `VISION_AI_ENDPOINT` | External AI inference service URL |
+```text
+VISION_CAMERA_URL
+VISION_AI_ENDPOINT
+```
 
----
+Defaults and thresholds are defined in `config/settings.py`.
 
-## Sprint 7 Preview
+## Useful Commands
 
-State persistence & crash recovery hardening:
-- Full system restore after unexpected restart
-- Job resume from exact execution position
-- Vision state sync after recovery
+```bash
+python -m pytest tests/test_sprint6.py -v
+```
