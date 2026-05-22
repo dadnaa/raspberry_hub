@@ -64,6 +64,7 @@ class MessageValidator:
             commandName=data["commandName"],
             gcode=data["gcode"],
             reason=data.get("reason"),
+            commandLogId=data["commandLogId"],
         )
 
     def parse_start_job(self, raw: str) -> StartJobMessage:

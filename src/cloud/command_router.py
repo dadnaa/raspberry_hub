@@ -75,6 +75,7 @@ class CommandRouter:
             commandName=command_name,
             gcode=gcode,
             status="QUEUED",
+            commandLogId=cmd.commandLogId,
         ))
 
         self._pub.command_response(CommandResponseMessage(
@@ -82,6 +83,7 @@ class CommandRouter:
             commandName=command_name,
             gcode=gcode,
             status="EXECUTING",
+            commandLogId=cmd.commandLogId,
         ))
 
         try:
@@ -109,6 +111,7 @@ class CommandRouter:
                         commandName=command_name,
                         gcode=gcode,
                         status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.info("[Router] SUCCESS: %s (mapped M25 -> pause)", command_name)
                 else:
@@ -118,6 +121,7 @@ class CommandRouter:
                         gcode=gcode,
                         status="ERROR",
                         reason="Gateway pause failed",
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.warning("[Router] FAILED: %s - gateway pause failed", command_name)
 
@@ -143,6 +147,7 @@ class CommandRouter:
                         commandName=command_name,
                         gcode=gcode,
                         status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.info("[Router] SUCCESS: %s (mapped M24 -> resume)", command_name)
                 else:
@@ -152,6 +157,7 @@ class CommandRouter:
                         gcode=gcode,
                         status="ERROR",
                         reason="Gateway resume failed",
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.warning("[Router] FAILED: %s - gateway resume failed", command_name)
 
@@ -182,6 +188,7 @@ class CommandRouter:
                         commandName=command_name,
                         gcode=gcode,
                         status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.info("[Router] SUCCESS: %s (mapped -> cancel)", command_name)
                 else:
@@ -191,6 +198,7 @@ class CommandRouter:
                         gcode=gcode,
                         status="ERROR",
                         reason="Gateway cancel failed",
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.warning("[Router] FAILED: %s - gateway cancel failed", command_name)
 
@@ -203,6 +211,7 @@ class CommandRouter:
                         commandName=command_name,
                         gcode=gcode,
                         status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.info(
                         "[Router] SUCCESS: %s in %.1fms",
@@ -217,6 +226,7 @@ class CommandRouter:
                         gcode=gcode,
                         status="ERROR",
                         reason=reason,
+                        commandLogId=cmd.commandLogId,
                     ))
                     logger.warning("[Router] FAILED: %s - %s", command_name, reason)
 
@@ -228,5 +238,6 @@ class CommandRouter:
                 gcode=gcode,
                 status="ERROR",
                 reason=reason,
+                commandLogId=cmd.commandLogId,
             ))
             logger.exception("[Router] Exception executing %s: %s", command_name, exc)

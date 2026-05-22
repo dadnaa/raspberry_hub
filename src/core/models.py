@@ -51,6 +51,7 @@ class CommandMessage:
     commandName: str
     gcode:       str
     reason:      Optional[str] = None
+    commandLogId: str
 
     def to_json(self) -> str:
         return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
@@ -124,6 +125,7 @@ class CommandResponseMessage:
     status:      CommandStateStatus
     reason:      Optional[str] = None
     timestamp:   Optional[str] = None
+    commandLogId: str
 
     def to_json(self) -> str:
         return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
