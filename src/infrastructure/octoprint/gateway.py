@@ -23,6 +23,7 @@ from config.settings import (
     OCTOPRINT_PRINT_WAIT_SEC,
     OCTOPRINT_PRINT_START_WAIT_SEC,
     OCTOPRINT_JOB_CONTROL_VERIFY_SEC,
+    OCTOPRINT_NONOP_WARN_BACKOFF_SEC,
 )
 import os
 from src.core.printer_state import PrinterStatus
@@ -92,6 +93,9 @@ class OctoPrintGateway:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._event_stream: Optional[OctoPrintEventStream] = None
+        # Backoff control for repeated non-operational warnings
+        self._last_nonop_warning: float = 0.0
+        self._nonop_backoff_sec: float = OCTOPRINT_NONOP_WARN_BACKOFF_SEC
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -247,9 +251,15 @@ class OctoPrintGateway:
         except OctoPrintError as e:
             msg = str(e)
             # OctoPrint may return 409 with a JSON error when the printer
-            # is not operational. Treat that as ERROR without spamming stacktraces.
+            # is not operational. Treat that as ERROR but rate-limit warnings
+            # to avoid log spam during extended offline periods.
             if "409" in msg or "not operational" in msg.lower():
-                logger.warning("[OctoPrintGateway] Printer not operational: %s", msg)
+                now = time.time()
+                if now - self._last_nonop_warning >= self._nonop_backoff_sec:
+                    logger.warning("[OctoPrintGateway] Printer not operational: %s", msg)
+                    self._last_nonop_warning = now
+                else:
+                    logger.debug("[OctoPrintGateway] Printer not operational (suppressed warn): %s", msg)
                 self._state.update(status=PrinterStatus.ERROR)
                 return
             logger.exception("[OctoPrintGateway] Telemetry poll failed.")

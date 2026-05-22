@@ -130,6 +130,11 @@ OCTOPRINT_PRINT_START_WAIT_SEC = 10
 # appear in OctoPrint telemetry before falling back to sending raw G-code.
 OCTOPRINT_JOB_CONTROL_VERIFY_SEC = 3
 
+# Backoff interval (seconds) between logging repeated "printer not operational"
+# warnings from OctoPrint polling to avoid spamming logs during extended
+# offline periods.
+OCTOPRINT_NONOP_WARN_BACKOFF_SEC = 30
+
 
 # Jobs
 JOB_STORAGE_DIR = Path("data/jobs")
