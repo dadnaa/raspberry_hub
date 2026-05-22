@@ -179,7 +179,8 @@ class OctoPrintGateway:
 
     def _job_control(self, fn, name: str) -> bool:
         try:
-            fn()
+            resp = fn()
+            logger.debug("[OctoPrintGateway] Job control %s response: %r", name, resp)
             return True
         except Exception:
             logger.exception("[OctoPrintGateway] Job control failed: %s", name)

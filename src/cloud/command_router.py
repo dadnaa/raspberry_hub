@@ -83,30 +83,85 @@ class CommandRouter:
         ))
 
         try:
-            result = self._printer_gateway.send(gcode)
+            # Detect common pause/resume G-code and use job-control APIs where possible.
+            g_upper = (gcode or "").strip().upper()
+            if g_upper.startswith("M25"):
+                ok = False
+                try:
+                    if hasattr(self._printer_gateway, "pause"):
+                        ok = self._printer_gateway.pause()
+                except Exception as exc:
+                    logger.exception("[Router] Exception calling gateway.pause(): %s", exc)
 
-            if result.succeeded:
-                self._pub.command_response(CommandResponseMessage(
-                    printerId=printer_id,
-                    commandName=command_name,
-                    gcode=gcode,
-                    status="SUCCESS",
-                ))
-                logger.info(
-                    "[Router] SUCCESS: %s in %.1fms",
-                    command_name,
-                    result.elapsed_ms or 0.0,
-                )
+                if ok:
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="SUCCESS",
+                    ))
+                    logger.info("[Router] SUCCESS: %s (mapped M25 -> pause)", command_name)
+                else:
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="ERROR",
+                        reason="Gateway pause failed",
+                    ))
+                    logger.warning("[Router] FAILED: %s - gateway pause failed", command_name)
+
+            elif g_upper.startswith("M24"):
+                ok = False
+                try:
+                    if hasattr(self._printer_gateway, "resume"):
+                        ok = self._printer_gateway.resume()
+                except Exception as exc:
+                    logger.exception("[Router] Exception calling gateway.resume(): %s", exc)
+
+                if ok:
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="SUCCESS",
+                    ))
+                    logger.info("[Router] SUCCESS: %s (mapped M24 -> resume)", command_name)
+                else:
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="ERROR",
+                        reason="Gateway resume failed",
+                    ))
+                    logger.warning("[Router] FAILED: %s - gateway resume failed", command_name)
+
             else:
-                reason = f"Gateway status: {result.status.name}"
-                self._pub.command_response(CommandResponseMessage(
-                    printerId=printer_id,
-                    commandName=command_name,
-                    gcode=gcode,
-                    status="ERROR",
-                    reason=reason,
-                ))
-                logger.warning("[Router] FAILED: %s - %s", command_name, reason)
+                result = self._printer_gateway.send(gcode)
+
+                if result.succeeded:
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="SUCCESS",
+                    ))
+                    logger.info(
+                        "[Router] SUCCESS: %s in %.1fms",
+                        command_name,
+                        result.elapsed_ms or 0.0,
+                    )
+                else:
+                    reason = f"Gateway status: {result.status.name}"
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="ERROR",
+                        reason=reason,
+                    ))
+                    logger.warning("[Router] FAILED: %s - %s", command_name, reason)
 
         except Exception as exc:
             reason = str(exc)

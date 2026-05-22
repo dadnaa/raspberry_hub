@@ -53,13 +53,19 @@ class OctoPrintClient:
         self._request("POST", "/api/printer/command", {"commands": [command]})
 
     def pause_job(self) -> None:
-        self._request("POST", "/api/job", {"command": "pause", "action": "pause"})
+        resp = self._request("POST", "/api/job", {"command": "pause", "action": "pause"})
+        logger.debug("[OctoPrintClient] pause_job response: %r", resp)
+        return resp
 
     def resume_job(self) -> None:
-        self._request("POST", "/api/job", {"command": "pause", "action": "resume"})
+        resp = self._request("POST", "/api/job", {"command": "pause", "action": "resume"})
+        logger.debug("[OctoPrintClient] resume_job response: %r", resp)
+        return resp
 
     def cancel_job(self) -> None:
-        self._request("POST", "/api/job", {"command": "cancel"})
+        resp = self._request("POST", "/api/job", {"command": "cancel"})
+        logger.debug("[OctoPrintClient] cancel_job response: %r", resp)
+        return resp
 
     def connect(self, port: Optional[str] = None, baudrate: Optional[int] = None) -> None:
         payload: dict[str, Any] = {"command": "connect"}
