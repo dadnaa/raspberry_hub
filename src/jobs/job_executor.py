@@ -33,15 +33,26 @@ class JobExecutor:
     def __init__(
         self,
         job:             Job,
-        command_engine,
-        store:           JobStore,
-        publish_state:   Callable[[JobStateMessage], None],
-        printer_id:      str,
+        printer_gateway=None,
+        store:           Optional[JobStore] = None,
+        publish_state:   Optional[Callable[[JobStateMessage], None]] = None,
+        printer_id:      Optional[str] = None,
         on_finished:     Optional[Callable[[Job], None]] = None,
         state_listener:  Optional[Callable[[Job], None]] = None,
+        command_engine=None,
     ) -> None:
+        gateway = printer_gateway if printer_gateway is not None else command_engine
+        if gateway is None:
+            raise ValueError("JobExecutor requires printer_gateway.")
+        if store is None:
+            raise ValueError("JobExecutor requires store.")
+        if publish_state is None:
+            raise ValueError("JobExecutor requires publish_state.")
+        if printer_id is None:
+            raise ValueError("JobExecutor requires printer_id.")
+
         self._job            = job
-        self._engine         = command_engine
+        self._printer_gateway = gateway
         self._store          = store
         self._publish        = publish_state
         self._printer_id     = printer_id
@@ -136,7 +147,7 @@ class JobExecutor:
                     break
 
                 try:
-                    result = self._engine.send(gcode)
+                    result = self._printer_gateway.send(gcode)
                 except Exception as exc:
                     job.mark_failed(reason=str(exc))
                     self._persist_and_publish(); self._fire_finished(); return
@@ -164,7 +175,7 @@ class JobExecutor:
 
     def _do_pause(self) -> None:
         job = self._job
-        try: self._engine.send("M25")
+        try: self._pause_printer()
         except Exception: pass
         job.mark_paused()
         self._persist_and_publish()
@@ -175,7 +186,7 @@ class JobExecutor:
         ):
             time.sleep(_PAUSE_POLL_INTERVAL)
         if not self._cancel_event.is_set() and not self._fail_event.is_set():
-            try: self._engine.send("M24")
+            try: self._resume_printer()
             except Exception: pass
             job.mark_printing()
             self._persist_and_publish()
@@ -190,9 +201,25 @@ class JobExecutor:
         self._fire_finished()
 
     def _safe_stop(self) -> None:
+        if hasattr(self._printer_gateway, "cancel"):
+            try:
+                if self._printer_gateway.cancel():
+                    return
+            except Exception:
+                pass
         for cmd in ("M25", "M104 S0", "M140 S0", "M84"):
-            try: self._engine.send(cmd)
+            try: self._printer_gateway.send(cmd)
             except Exception: pass
+
+    def _pause_printer(self) -> None:
+        if hasattr(self._printer_gateway, "pause") and self._printer_gateway.pause():
+            return
+        self._printer_gateway.send("M25")
+
+    def _resume_printer(self) -> None:
+        if hasattr(self._printer_gateway, "resume") and self._printer_gateway.resume():
+            return
+        self._printer_gateway.send("M24")
 
     def _persist_and_publish(self) -> None:
         job = self._job

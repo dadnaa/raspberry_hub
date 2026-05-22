@@ -28,7 +28,7 @@ from src.core.models import (
     ResumeJobMessage,
     StopJobMessage,
 )
-from src.telemetry.printer_state import PrinterStatus
+from src.core.printer_state import PrinterStatus
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +51,21 @@ class MQTTBridge:
 
     def __init__(
         self,
-        command_engine,
-        state_manager,
-        printer_config: PrinterConfig,
+        printer_gateway=None,
+        state_manager=None,
+        printer_config: Optional[PrinterConfig] = None,
         job_manager:    Optional[JobManager] = None,
+        command_engine=None,
     ) -> None:
-        self._engine  = command_engine
+        gateway = printer_gateway if printer_gateway is not None else command_engine
+        if gateway is None:
+            raise ValueError("MQTTBridge requires printer_gateway.")
+        if state_manager is None:
+            raise ValueError("MQTTBridge requires state_manager.")
+        if printer_config is None:
+            raise ValueError("MQTTBridge requires printer_config.")
+
+        self._printer_gateway = gateway
         self._state   = state_manager
         self._config  = printer_config
 
@@ -68,12 +77,12 @@ class MQTTBridge:
             topics=self._topics,
             publisher=self._pub,
             validator=self._val,
-            command_engine=command_engine,
+            printer_gateway=gateway,
         )
 
         # JobManager — created here if not injected
         self._jobs = job_manager or JobManager(
-            command_engine=command_engine,
+            printer_gateway=gateway,
             publish_state=self._pub.job_state,
             printer_id=self._mqtt.printer_id,
         )

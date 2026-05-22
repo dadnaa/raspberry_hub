@@ -36,7 +36,7 @@ class JobManager:
     Manages the full job lifecycle for one printer.
 
     Args:
-        command_engine – Sprint 2 CommandEngine
+        printer_gateway - printer-facing gateway implementing send/pause/resume/cancel
         publish_state  – MQTTPublisher.job_state callable
         printer_id     – MQTT printer identifier
         store          – JobStore (optional; defaults to new instance)
@@ -44,12 +44,21 @@ class JobManager:
 
     def __init__(
         self,
-        command_engine,
-        publish_state:  Callable[[JobStateMessage], None],
-        printer_id:     str,
+        printer_gateway=None,
+        publish_state:  Optional[Callable[[JobStateMessage], None]] = None,
+        printer_id:     Optional[str] = None,
         store:          Optional[JobStore] = None,
+        command_engine=None,
     ) -> None:
-        self._engine      = command_engine
+        gateway = printer_gateway if printer_gateway is not None else command_engine
+        if gateway is None:
+            raise ValueError("JobManager requires printer_gateway.")
+        if publish_state is None:
+            raise ValueError("JobManager requires publish_state.")
+        if printer_id is None:
+            raise ValueError("JobManager requires printer_id.")
+
+        self._printer_gateway = gateway
         self._publish     = publish_state
         self._printer_id  = printer_id
         self._store       = store or JobStore()
@@ -237,7 +246,7 @@ class JobManager:
         self._active = job
         self._executor = JobExecutor(
             job=job,
-            command_engine=self._engine,
+            printer_gateway=self._printer_gateway,
             store=self._store,
             publish_state=self._publish,
             printer_id=self._printer_id,

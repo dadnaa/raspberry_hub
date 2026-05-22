@@ -1,73 +1,49 @@
-"""
-command_router.py — Incoming Command Router + Feedback Publisher
+"""Incoming MQTT command router.
 
-Receives validated MQTT messages and routes them into the Command Queue.
-Publishes CommandResponseMessage at every lifecycle stage.
-
-Pipeline per incoming command:
-  1. Parse + validate payload          (MessageValidator)
-  2. Publish QUEUED response            (MQTTPublisher)
-  3. Inject into CommandEngine queue    (CommandEngine.send / send_batch)
-  4. Publish EXECUTING response
-  5. Publish SUCCESS or ERROR response
-
-CRITICAL: No direct serial writes happen here.
-          The CommandEngine is the only thing that touches the printer.
+Validated MQTT commands are sent through the printer gateway abstraction and
+reported back to the cloud as QUEUED, EXECUTING, SUCCESS, or ERROR.
 """
 
 import logging
 import threading
-from typing import Optional
 
-from src.core.models import (
-    CommandMessage,
-    StartJobMessage,
-    CommandResponseMessage,
-)
-from src.cloud.mqtt_topics      import MQTTTopics
-from src.cloud.mqtt_publisher   import MQTTPublisher
 from src.cloud.message_validator import MessageValidator, ValidationError
+from src.cloud.mqtt_publisher import MQTTPublisher
+from src.cloud.mqtt_topics import MQTTTopics
+from src.core.models import CommandMessage, CommandResponseMessage
 
 logger = logging.getLogger(__name__)
 
 
 class CommandRouter:
-    """
-    Routes cloud commands into the local command engine with full
-    lifecycle feedback published back over MQTT.
-
-    Args:
-        topics      – MQTTTopics for this printer
-        publisher   – MQTTPublisher (upstream messages)
-        validator   – MessageValidator
-        command_engine – Sprint 2 CommandEngine instance
-    """
+    """Routes cloud commands into the printer gateway with MQTT feedback."""
 
     def __init__(
         self,
-        topics:         MQTTTopics,
-        publisher:      MQTTPublisher,
-        validator:      MessageValidator,
-        command_engine,                   # CommandEngine (avoid circular import)
+        topics: MQTTTopics,
+        publisher: MQTTPublisher,
+        validator: MessageValidator,
+        printer_gateway=None,
+        command_engine=None,
     ) -> None:
-        self._topics  = topics
-        self._pub     = publisher
-        self._val     = validator
-        self._engine  = command_engine
+        gateway = printer_gateway if printer_gateway is not None else command_engine
+        if gateway is None:
+            raise ValueError("CommandRouter requires printer_gateway.")
 
-    # ------------------------------------------------------------------
-    # Entry points — called by MQTTBridge on message receipt
-    # ------------------------------------------------------------------
+        self._topics = topics
+        self._pub = publisher
+        self._val = validator
+        self._printer_gateway = gateway
 
     def handle_command(self, payload: str) -> None:
-        """Handle printer/{id}/command message."""
+        """Handle printer/{id}/command messages."""
         try:
             cmd = self._val.parse_command(payload)
         except ValidationError as exc:
-            logger.warning(f"[Router] Rejected command: {exc}")
+            logger.warning("[Router] Rejected command: %s", exc)
             return
 
-        logger.info(f"[Router] Accepted command: {cmd.commandName} -> {cmd.gcode!r}")
+        logger.info("[Router] Accepted command: %s -> %r", cmd.commandName, cmd.gcode)
         threading.Thread(
             target=self._execute_command,
             args=(cmd,),
@@ -75,26 +51,23 @@ class CommandRouter:
         ).start()
 
     def handle_start_job(self, payload: str) -> None:
-        """Handle printer/{id}/start-job message."""
+        """Legacy Sprint 4 hook. Full job dispatch is owned by MQTTBridge."""
         try:
             job = self._val.parse_start_job(payload)
         except ValidationError as exc:
-            logger.warning(f"[Router] Rejected start-job: {exc}")
+            logger.warning("[Router] Rejected start-job: %s", exc)
             return
-
-        # Sprint 4 scope: acknowledge receipt; full job execution is Sprint 5
-        logger.info(f"[Router] start-job received: jobId={job.jobId!r} url={job.fileUrl!r}")
-
-    # ------------------------------------------------------------------
-    # Command execution pipeline (runs in its own thread per command)
-    # ------------------------------------------------------------------
+        logger.info(
+            "[Router] start-job received: jobId=%r url=%r",
+            job.jobId,
+            job.fileUrl,
+        )
 
     def _execute_command(self, cmd: CommandMessage) -> None:
-        printer_id   = cmd.printerId
+        printer_id = cmd.printerId
         command_name = cmd.commandName
-        gcode        = cmd.gcode
+        gcode = cmd.gcode
 
-        # Stage 1: QUEUED
         self._pub.command_response(CommandResponseMessage(
             printerId=printer_id,
             commandName=command_name,
@@ -102,7 +75,6 @@ class CommandRouter:
             status="QUEUED",
         ))
 
-        # Stage 2: EXECUTING
         self._pub.command_response(CommandResponseMessage(
             printerId=printer_id,
             commandName=command_name,
@@ -110,9 +82,8 @@ class CommandRouter:
             status="EXECUTING",
         ))
 
-        # Stage 3: Send through CommandEngine and wait for result
         try:
-            result = self._engine.send(gcode)
+            result = self._printer_gateway.send(gcode)
 
             if result.succeeded:
                 self._pub.command_response(CommandResponseMessage(
@@ -121,9 +92,13 @@ class CommandRouter:
                     gcode=gcode,
                     status="SUCCESS",
                 ))
-                logger.info(f"[Router] SUCCESS: {command_name} in {result.elapsed_ms:.1f}ms")
+                logger.info(
+                    "[Router] SUCCESS: %s in %.1fms",
+                    command_name,
+                    result.elapsed_ms or 0.0,
+                )
             else:
-                reason = f"Engine status: {result.status.name}"
+                reason = f"Gateway status: {result.status.name}"
                 self._pub.command_response(CommandResponseMessage(
                     printerId=printer_id,
                     commandName=command_name,
@@ -131,7 +106,7 @@ class CommandRouter:
                     status="ERROR",
                     reason=reason,
                 ))
-                logger.warning(f"[Router] FAILED: {command_name} — {reason}")
+                logger.warning("[Router] FAILED: %s - %s", command_name, reason)
 
         except Exception as exc:
             reason = str(exc)
@@ -142,4 +117,4 @@ class CommandRouter:
                 status="ERROR",
                 reason=reason,
             ))
-            logger.exception(f"[Router] Exception executing {command_name}: {exc}")
+            logger.exception("[Router] Exception executing %s: %s", command_name, exc)

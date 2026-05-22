@@ -1,36 +1,25 @@
-"""
-main.py — Fixed Entry Point (applies to Sprint 4 onwards)
+"""Production entry point for the OctoPrint-backed edge hub.
 
-KEY WIRING CHANGES vs previous main.py versions
-─────────────────────────────────────────────────
-1. SerialRouter is created after connect() and started immediately.
-   It owns the ONE background thread that calls read_line().
-
-2. CommandEngine receives the router so PrinterCommunicator
-   reads from router.ack_queue instead of calling read_line() directly.
-
-3. TelemetryEngine receives router.telemetry_queue — unchanged API,
-   but now fed correctly by SerialRouter instead of nothing.
-
-4. SerialConnection receives router.reset_queues as on_reconnect hook
-   so stale queue data is flushed atomically on reconnect.
-
-5. VisionController is wired via bridge.job_manager (public property)
-   and bridge.mqtt_client (public property) — no more private attribute access.
+The domain layers still own cloud control, local job state, persistence, and
+vision safety. Direct serial command execution and raw telemetry parsing are
+replaced by `OctoPrintGateway`.
 """
 
-import os
-import sys
-import signal
-import threading
 import logging
-from pathlib import Path
+import os
+import signal
+import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from config.settings import (
     MQTT_DEFAULT_PRINTER_ID,
     MQTT_PRINTER_ID_ENV,
+    OCTOPRINT_API_KEY_ENV,
+    OCTOPRINT_BASE_URL_ENV,
+    OCTOPRINT_DEFAULT_BASE_URL,
+    OCTOPRINT_REQUEST_TIMEOUT_SEC,
     PRINTER_MODEL,
     PRINTER_NAME,
     PRINTER_NOZZLE_DIAMETER,
@@ -40,18 +29,16 @@ from config.settings import (
     VISION_DEFAULT_CAMERA_URL,
     VISION_FAILURE_THRESHOLD,
 )
-from src.utils.logger_setup          import setup_logging
-from src.hardware.serial_connection   import SerialConnection, SerialConnectionError
-from src.hardware.serial_router       import SerialRouter
-from src.engine.command_engine        import CommandEngine
-from src.telemetry                    import StateManager, TelemetryEngine
-from src.cloud.mqtt_bridge             import MQTTBridge, PrinterConfig
-from src.vision.ai_client             import AIClient
-from src.vision.vision_monitor        import VisionMonitor
-from src.vision.vision_controller     import VisionController
+from src.cloud.mqtt_bridge import MQTTBridge, PrinterConfig
+from src.core.state_manager import StateManager
+from src.infrastructure.octoprint import OctoPrintClient, OctoPrintGateway
+from src.utils.logger_setup import setup_logging
+from src.vision.ai_client import AIClient
+from src.vision.vision_controller import VisionController
 from src.vision.vision_event_publisher import VisionEventPublisher
+from src.vision.vision_monitor import VisionMonitor
 
-setup_logging(session_name="rasp-arch")
+setup_logging(session_name="octoprint-edge")
 logger = logging.getLogger(__name__)
 
 PRINTER_CONFIG = PrinterConfig(
@@ -61,114 +48,78 @@ PRINTER_CONFIG = PrinterConfig(
 )
 
 
-def main():
+def main() -> None:
     logger.info("=" * 60)
-    logger.info("  Reactive Edge Hub — Full Stack (Sprints 1-6)")
+    logger.info("  Reactive Edge Hub - OctoPrint Adapter Runtime")
     logger.info("=" * 60)
 
     camera_url = os.environ.get(VISION_CAMERA_URL_ENV, VISION_DEFAULT_CAMERA_URL)
     printer_id = os.environ.get(MQTT_PRINTER_ID_ENV, MQTT_DEFAULT_PRINTER_ID)
+    octoprint_url = os.environ.get(OCTOPRINT_BASE_URL_ENV, OCTOPRINT_DEFAULT_BASE_URL)
+    octoprint_key = os.environ.get(OCTOPRINT_API_KEY_ENV)
 
-    # ── 1. Serial connection (no on_reconnect yet — wired after router) ──
-    connection = SerialConnection()
-    try:
-        connection.connect()
-        logger.info(f"[Main] Serial: {connection.port_path} @ {connection.baud_rate}")
-    except SerialConnectionError as exc:
-        logger.critical(f"[Main] Serial failed: {exc}")
+    if not octoprint_key:
+        logger.critical("[Main] Missing %s environment variable.", OCTOPRINT_API_KEY_ENV)
         sys.exit(1)
 
-    # ── 2. Serial router — THE FIX ────────────────────────────────────
-    #    Must be created BEFORE CommandEngine and TelemetryEngine.
-    #    Owns the single read_line() call loop.
-    router = SerialRouter(connection)
-
-    # Wire reconnect hook: when serial reconnects, flush stale queue data
-    connection._on_reconnect = router.reset_queues
-
-    router.start()
-
-    # ── 3. State manager ──────────────────────────────────────────────
     state_manager = StateManager()
-
-    # ── 4. Telemetry engine — receives router.telemetry_queue ─────────
-    #    Every line the router reads is copied here automatically.
-    # ── 5. Command engine — receives router.ack_queue ─────────────────
-    #    PrinterCommunicator reads acks from queue, never from read_line().
-    command_engine = CommandEngine(connection, router=router)
-    telemetry = TelemetryEngine(
-        line_queue=router.telemetry_queue,
-        state_manager=state_manager,
-        command_sender=command_engine.send_fire_and_forget,
+    octoprint_client = OctoPrintClient(
+        base_url=octoprint_url,
+        api_key=octoprint_key,
+        timeout_sec=OCTOPRINT_REQUEST_TIMEOUT_SEC,
     )
-    #
-    # NOTE: CommandEngine.__init__ must be updated to accept `router`:
-    #
-    #   def __init__(self, connection: SerialConnection, router: SerialRouter):
-    #       self._comm = PrinterCommunicator(connection, ack_queue=router.ack_queue)
-    #       self._processor = QueueProcessor(self._comm)
-    #       self._lock = threading.Lock()
-    #       self._on_complete = None
+    printer_gateway = OctoPrintGateway(
+        client=octoprint_client,
+        state_manager=state_manager,
+    )
 
-    # ── 6. MQTT bridge ────────────────────────────────────────────────
     bridge = MQTTBridge(
-        command_engine=command_engine,
+        printer_gateway=printer_gateway,
         state_manager=state_manager,
         printer_config=PRINTER_CONFIG,
     )
 
-    # ── 7. Vision layer ───────────────────────────────────────────────
-    ai_client  = AIClient()
+    ai_client = AIClient()
     vision_pub = VisionEventPublisher(
-        mqtt_client=bridge.mqtt_client,    # ← public property, not bridge._mqtt
+        mqtt_client=bridge.mqtt_client,
         printer_id=printer_id,
     )
     monitor = VisionMonitor(
         stream_url=camera_url,
         ai_client=ai_client,
-        job_manager=bridge.job_manager,    # ← public property, not bridge._jobs
+        job_manager=bridge.job_manager,
         event_publisher=vision_pub,
         guard_config={
             "failure_threshold": VISION_FAILURE_THRESHOLD,
-            "confidence_min":    VISION_CONFIDENCE_MIN,
-            "cooldown_sec":      VISION_COOLDOWN_SEC,
+            "confidence_min": VISION_CONFIDENCE_MIN,
+            "cooldown_sec": VISION_COOLDOWN_SEC,
         },
     )
     controller = VisionController(monitor)
     bridge.job_manager.set_state_listener(controller.on_job_state_change)
 
-    # ── 8. Start all layers in dependency order ───────────────────────
-    # router already started (step 2)
-    command_engine.start()
-    telemetry.start()
+    printer_gateway.start()
     bridge.start()
-    # Vision activates automatically when a job transitions to PRINTING
 
     logger.info("[Main] All systems running.")
-    logger.info("[Main]   SerialRouter   → single reader, dual-queue fan-out")
-    logger.info("[Main]   TelemetryEngine→ reading telemetry_queue")
-    logger.info("[Main]   CommandEngine  → reading ack_queue")
-    logger.info("[Main]   MQTTBridge     → connected to HiveMQ")
-    logger.info("[Main]   VisionMonitor  → activates on PRINTING jobs")
+    logger.info("[Main]   OctoPrintGateway -> REST commands + state polling")
+    logger.info("[Main]   MQTTBridge       -> cloud command/job control")
+    logger.info("[Main]   VisionMonitor    -> activates on PRINTING jobs")
 
-    # ── 9. Graceful shutdown on SIGINT / SIGTERM ──────────────────────
     stop = threading.Event()
 
     def _shutdown(sig, frame):
-        logger.info(f"[Main] Signal {sig} — shutting down.")
+        logger.info("[Main] Signal %s - shutting down.", sig)
         stop.set()
 
-    signal.signal(signal.SIGINT,  _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
     stop.wait()
 
     logger.info("[Main] Stopping all layers...")
     controller.shutdown()
     bridge.stop()
-    command_engine.stop()
-    telemetry.stop()
-    router.stop()
-    connection.disconnect()
+    printer_gateway.stop()
     logger.info("[Main] Clean shutdown complete.")
 
 

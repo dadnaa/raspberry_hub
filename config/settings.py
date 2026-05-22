@@ -96,6 +96,28 @@ MQTT_REQUIRED_COMMAND_FIELDS = {"printerId", "commandName", "gcode"}
 MQTT_REQUIRED_START_JOB_FIELDS = {"printerId", "commandName", "jobId", "fileUrl"}
 
 
+# OctoPrint
+OCTOPRINT_BASE_URL_ENV = "OCTOPRINT_BASE_URL"
+OCTOPRINT_API_KEY_ENV = "OCTOPRINT_API_KEY"
+OCTOPRINT_DEFAULT_BASE_URL = "http://127.0.0.1:5000"
+OCTOPRINT_REQUEST_TIMEOUT_SEC = 10.0
+OCTOPRINT_POLL_INTERVAL_SEC = 2.0
+OCTOPRINT_WEBSOCKET_ENABLED_ENV = "OCTOPRINT_WEBSOCKET_ENABLED"
+OCTOPRINT_WEBSOCKET_RECONNECT_SEC = 5.0
+OCTOPRINT_STATUS_OPERATIONAL = {"operational", "ready"}
+OCTOPRINT_STATUS_PRINTING = {"printing"}
+OCTOPRINT_STATUS_PAUSED = {"paused"}
+OCTOPRINT_STATUS_PAUSING = {"pausing", "resuming"}
+OCTOPRINT_STATUS_CONNECTING = {"connecting", "detecting serial connection"}
+OCTOPRINT_STATUS_ERROR = {
+    "error",
+    "offline",
+    "offline after error",
+    "closed",
+    "closed with error",
+}
+
+
 # Jobs
 JOB_STORAGE_DIR = Path("data/jobs")
 JOB_PAUSE_POLL_INTERVAL_SEC = 0.25

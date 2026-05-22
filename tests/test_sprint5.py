@@ -15,6 +15,8 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -151,6 +153,36 @@ class TestJobModel(unittest.TestCase):
         job.current_line_index = 5
         job.update_progress()
         self.assertAlmostEqual(job.progress, 50.0)
+
+    def test_estimated_remaining_seconds(self):
+        job = self._make_job(["G28"] * 10)
+        job.mark_printing()
+        job.started_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+        job.current_line_index = 5
+
+        remaining = job.estimated_remaining_seconds
+
+        self.assertGreaterEqual(remaining, 9)
+        self.assertLessEqual(remaining, 11)
+
+    def test_estimated_remaining_seconds_zero_without_progress(self):
+        job = self._make_job(["G28"] * 10)
+        job.mark_printing()
+        self.assertEqual(job.estimated_remaining_seconds, 0)
+
+    def test_estimated_remaining_display(self):
+        job = self._make_job(["G28"] * 10)
+        job.mark_printing()
+        job.started_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+        job.current_line_index = 5
+
+        self.assertEqual(job.estimated_remaining_display, "0h 01m")
+
+    def test_mqtt_status_done_for_completed(self):
+        job = self._make_job()
+        job.mark_completed()
+        self.assertEqual(job.status, "COMPLETED")
+        self.assertEqual(job.mqtt_status, "DONE")
 
     def test_next_line(self):
         job = self._make_job(["G28", "M104"])
@@ -388,7 +420,8 @@ class TestJobManager(unittest.TestCase):
         f.close()
         return StartJobMessage(
             printerId="p1",
-            jobId=f"job-{id(f)}",
+            commandName="StartJob",
+            jobId=f"job-{uuid.uuid4()}",
             fileUrl=f.name,
         ), f.name
 
