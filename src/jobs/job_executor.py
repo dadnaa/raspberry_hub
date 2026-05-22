@@ -184,61 +184,10 @@ class JobExecutor:
                 self._persist_and_publish(); self._fire_finished()
             return
 
-        # Fallback: stream G-code lines directly (legacy behavior)
-        job.mark_printing()
+        # Legacy streaming removed — require upload/print-capable gateway.
+        job.mark_failed(reason="Printer gateway does not support file upload/print")
         self._persist_and_publish()
-
-        try:
-            while job.current_line_index < job.total_lines:
-                if self._fail_event.is_set():
-                    self._fail_job()
-                    return
-
-                if self._cancel_event.is_set():
-                    self._safe_stop(); job.mark_cancelled()
-                    self._persist_and_publish(); self._fire_finished(); return
-
-                if self._pause_event.is_set():
-                    self._do_pause()
-                    if self._fail_event.is_set():
-                        self._fail_job()
-                        return
-
-                    if self._cancel_event.is_set():
-                        self._safe_stop(); job.mark_cancelled()
-                        self._persist_and_publish(); self._fire_finished(); return
-                    continue
-
-                gcode = job.next_line
-                if not gcode:
-                    break
-
-                try:
-                    result = self._printer_gateway.send(gcode)
-                except Exception as exc:
-                    job.mark_failed(reason=str(exc))
-                    self._persist_and_publish(); self._fire_finished(); return
-
-                if not result.succeeded:
-                    job.mark_failed(reason=f"Rejected {gcode!r}: {result.status.name}")
-                    self._persist_and_publish(); self._fire_finished(); return
-
-                job.current_line_index += 1
-                job.update_progress()
-                self._persist_and_publish()
-                time.sleep(_COMMAND_YIELD_SEC)
-
-            if self._fail_event.is_set():
-                self._fail_job()
-            elif not self._cancel_event.is_set():
-                job.mark_completed()
-                self._fire_finished()
-                self._persist_and_publish()
-
-        except Exception as exc:
-            logger.exception(f"[Executor] Unexpected: {exc}")
-            job.mark_failed(reason=str(exc))
-            self._persist_and_publish(); self._fire_finished()
+        self._fire_finished()
 
     def _do_pause(self) -> None:
         job = self._job

@@ -25,7 +25,7 @@ from typing import Callable, Deque, Dict, Optional
 from src.jobs.job_model    import Job
 from src.jobs.job_executor import JobExecutor
 from src.jobs.job_store    import JobStore
-from src.jobs.gcode_pipeline import load
+
 from src.core.models       import JobStateMessage, StartJobMessage
 
 logger = logging.getLogger(__name__)
@@ -95,16 +95,12 @@ class JobManager:
         """
         logger.info(f"[JobManager] Submitting job {msg.jobId!r} from {msg.fileUrl!r}")
 
-        # Load + parse G-code (may raise)
-        try:
-            gcode_lines = load(msg.fileUrl)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to load G-code: {exc}") from exc
-
+        # Upload-only flow: don't download G-code here. The executor will
+        # perform the upload and print via the OctoPrint client.
         job = Job.create(
             printer_id=msg.printerId,
             file_url=msg.fileUrl,
-            gcode_lines=gcode_lines,
+            gcode_lines=[],
             job_id=msg.jobId,
         )
 
@@ -193,28 +189,8 @@ class JobManager:
         recovered = 0
         with self._lock:
             for job in resumable:
-                if not job.gcode_lines:
-                    # No persisted G-code — try re-fetching as fallback
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(
-                        f"[JobManager] Job {job.job_id!r} has no persisted G-code. "
-                        f"Attempting re-fetch from {job.file_url!r}."
-                    )
-                    try:
-                        from src.jobs.gcode_pipeline import load
-                        job.gcode_lines = load(job.file_url)
-                        job.total_lines = len(job.gcode_lines)
-                    except Exception as exc:
-                        logger.error(
-                            f"[JobManager] Cannot recover job {job.job_id!r} — "
-                            f"G-code unavailable: {exc}"
-                        )
-                        job.mark_failed(f"Recovery failed: G-code unavailable: {exc}")
-                        self._store.save(job)
-                        continue
-
-                # Reset to QUEUED — executor will transition to PRINTING
+                # For upload-only flow we no longer persist G-code lines.
+                # Simply reset to QUEUED — the executor will upload/print.
                 job.status = "QUEUED"
                 if self._active is None:
                     self._start_job(job)

@@ -69,6 +69,9 @@ class IPrinterGateway(Protocol):
     def pause(self) -> bool: ...
     def resume(self) -> bool: ...
     def cancel(self) -> bool: ...
+    def upload_file(self, source_url: str, target_name: Optional[str] = None) -> str: ...
+    def print_file(self, filename: str) -> bool: ...
+    def get_job(self) -> dict: ...
 
 
 class OctoPrintGateway:
@@ -291,6 +294,8 @@ class MockGateway:
         self.started = False
         self.paused = False
         self.cancelled = False
+        self.uploads: list[str] = []
+        self._progress: float = 0.0
 
     def start(self) -> None:
         self.started = True
@@ -322,6 +327,24 @@ class MockGateway:
     def cancel(self) -> bool:
         self.cancelled = True
         return True
+
+    # Upload/print API for tests and local dev
+    def upload_file(self, source_url: str, target_name: Optional[str] = None) -> str:
+        if target_name:
+            filename = target_name
+        else:
+            filename = source_url.split("/")[-1] or "upload.gcode"
+        self.uploads.append(filename)
+        return filename
+
+    def print_file(self, filename: str) -> bool:
+        self.started = True
+        # reset progress for the file
+        self._progress = 0.0
+        return True
+
+    def get_job(self) -> dict:
+        return {"progress": {"completion": self._progress}}
 
 
 def _map_status(status_text: str) -> PrinterStatus:
