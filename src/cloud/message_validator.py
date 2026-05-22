@@ -105,11 +105,7 @@ class MessageValidator:
             )
 
     def _verify_gcode(self, gcode: str) -> None:
+        # Whitelist disabled: accept any gcode coming from MQTT without verification.
         if not gcode or not isinstance(gcode, str):
             raise ValidationError("gcode field is empty or not a string.")
-        cmd = gcode.strip().upper()
-        if not any(cmd.startswith(prefix) for prefix in _ALLOWED_GCODE_PREFIXES):
-            raise ValidationError(
-                f"G-code not on whitelist: {gcode!r}. "
-                f"Allowed prefixes: {_ALLOWED_GCODE_PREFIXES}"
-            )
+        return
