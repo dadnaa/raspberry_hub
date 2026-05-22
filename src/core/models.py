@@ -50,8 +50,8 @@ class CommandMessage:
     printerId:   str
     commandName: str
     gcode:       str
-    reason:      Optional[str] = None
     commandLogId: str
+    reason:      Optional[str] = None
 
     def to_json(self) -> str:
         return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
@@ -123,9 +123,9 @@ class CommandResponseMessage:
     commandName: str
     gcode:       str
     status:      CommandStateStatus
+    commandLogId: str
     reason:      Optional[str] = None
     timestamp:   Optional[str] = None
-    commandLogId: str
 
     def to_json(self) -> str:
         return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
