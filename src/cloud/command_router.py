@@ -36,6 +36,14 @@ class CommandRouter:
         self._val = validator
         self._printer_gateway = gateway
         self._job_manager = job_manager
+        # pending command results: commandLogId -> {'event': Event, 'resp': str, 'is_error': bool}
+        self._pending_results: dict[str, dict] = {}
+        # register for gateway command notifications when supported
+        try:
+            if hasattr(self._printer_gateway, "register_command_listener"):
+                self._printer_gateway.register_command_listener(self._on_command_result)
+        except Exception:
+            logger.exception("[Router] Failed to register command listener on gateway")
 
     def handle_command(self, payload: str) -> None:
         """Handle printer/{id}/command messages."""
@@ -211,41 +219,51 @@ class CommandRouter:
             else:
                 result = self._printer_gateway.send(gcode)
 
-                if result.succeeded:
-                    # Use the last response line from the gateway if available
-                    last_resp = None
-                    if getattr(result, "responses", None):
-                        last_resp = result.responses[-1] if len(result.responses) else None
-                    self._pub.command_response(CommandResponseMessage(
-                        printerId=printer_id,
-                        commandName=command_name,
-                        gcode=gcode,
-                        status="SUCCESS",
-                        commandLogId=cmd.commandLogId,
-                        response=last_resp,
-                    ))
-                    logger.info(
-                        "[Router] SUCCESS: %s in %.1fms",
-                        command_name,
-                        result.elapsed_ms or 0.0,
-                    )
-                else:
-                    reason = f"Gateway status: {result.status.name}"
-                    # Prefer explicit error_message, otherwise last response
-                    last_resp = None
-                    if getattr(result, "responses", None):
-                        last_resp = result.responses[-1] if len(result.responses) else None
-                    resp_text = result.error_message or last_resp
-                    self._pub.command_response(CommandResponseMessage(
-                        printerId=printer_id,
-                        commandName=command_name,
-                        gcode=gcode,
-                        status="ERROR",
-                        reason=reason,
-                        commandLogId=cmd.commandLogId,
-                        response=resp_text,
-                    ))
-                    logger.warning("[Router] FAILED: %s - %s", command_name, reason)
+                # Track pending command so gateway event scanner can correlate
+                try:
+                    if hasattr(self._printer_gateway, "track_pending_command"):
+                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
+                except Exception:
+                    logger.exception("[Router] Failed to track pending command on gateway")
+
+                # Set up a waiter for a short window to detect printer-reported errors
+                from threading import Event
+
+                ev = Event()
+                self._pending_results[cmd.commandLogId] = {"event": ev, "resp": None, "is_error": False}
+
+                def _wait_and_publish():
+                    # wait up to 3 seconds for gateway to report an error
+                    waited = ev.wait(3.0)
+                    info = self._pending_results.pop(cmd.commandLogId, None)
+                    if info and info.get("event") and info.get("is_error"):
+                        # gateway reported an error for this command
+                        self._pub.command_response(CommandResponseMessage(
+                            printerId=printer_id,
+                            commandName=command_name,
+                            gcode=gcode,
+                            status="ERROR",
+                            reason=info.get("resp"),
+                            commandLogId=cmd.commandLogId,
+                            response=info.get("resp"),
+                        ))
+                        logger.warning("[Router] Command %s reported ERROR by printer: %s", command_name, info.get("resp"))
+                    else:
+                        # No error observed in window — treat as success
+                        last_resp = None
+                        if getattr(result, "responses", None):
+                            last_resp = result.responses[-1] if len(result.responses) else None
+                        self._pub.command_response(CommandResponseMessage(
+                            printerId=printer_id,
+                            commandName=command_name,
+                            gcode=gcode,
+                            status="SUCCESS",
+                            commandLogId=cmd.commandLogId,
+                            response=last_resp,
+                        ))
+                        logger.info("[Router] SUCCESS: %s in %.1fms", command_name, result.elapsed_ms or 0.0)
+
+                threading.Thread(target=_wait_and_publish, daemon=True).start()
 
         except Exception as exc:
             reason = str(exc)
@@ -258,3 +276,18 @@ class CommandRouter:
                 commandLogId=cmd.commandLogId,
             ))
             logger.exception("[Router] Exception executing %s: %s", command_name, exc)
+
+    def _on_command_result(self, command_log_id: str, resp_text: str, is_error: bool) -> None:
+        """Called by gateway when a printer response correlated to a pending
+        command is discovered. Marks the pending waiter so the router thread
+        can publish an ERROR state immediately.
+        """
+        info = self._pending_results.get(command_log_id)
+        if not info:
+            return
+        info["resp"] = resp_text
+        info["is_error"] = bool(is_error)
+        try:
+            info["event"].set()
+        except Exception:
+            logger.exception("[Router] Failed setting pending event for %s", command_log_id)

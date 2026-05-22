@@ -98,6 +98,10 @@ class OctoPrintGateway:
         self._nonop_backoff_sec: float = OCTOPRINT_NONOP_WARN_BACKOFF_SEC
         # Last textual response from a gateway command (for MQTT response field)
         self._last_command_response: Optional[str] = None
+        # Pending commands awaiting printer response: list of (cmd_log_id, ts, gcode)
+        self._pending_commands: list[tuple[str, float, str]] = []
+        # Command result listeners: callbacks taking (commandLogId, response_text, is_error)
+        self._command_listeners: list[callable] = []
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -329,6 +333,13 @@ class OctoPrintGateway:
         current = message.get("current")
         if isinstance(current, dict):
             self._apply_current_payload(current)
+        # Also scan the raw message for textual printer responses that may
+        # indicate command errors (e.g., "Unknown command"). Attempt to
+        # correlate these to recently-sent commands.
+        try:
+            self._scan_for_printer_texts(message)
+        except Exception:
+            logger.exception("[OctoPrintGateway] Failed scanning event for printer responses")
 
     def _apply_current_payload(self, current: dict) -> None:
         updates = {}
@@ -356,6 +367,59 @@ class OctoPrintGateway:
             updates["progress_pct"] = round(float(completion), 2)
 
         self._state.update(**updates)
+
+    def register_command_listener(self, callback: callable) -> None:
+        self._command_listeners.append(callback)
+
+    def track_pending_command(self, command_log_id: str, gcode: str) -> None:
+        # record with current monotonic timestamp
+        self._pending_commands.append((command_log_id, time.time(), gcode))
+
+    def _scan_for_printer_texts(self, message: dict) -> None:
+        """Search message dict for textual printer responses and notify listeners.
+
+        This is heuristic: look for substrings that indicate errors and map them
+        to the most recent pending command sent within the last few seconds.
+        """
+        text_fragments: list[str] = []
+
+        def collect_texts(obj):
+            if isinstance(obj, str):
+                text_fragments.append(obj)
+            elif isinstance(obj, dict):
+                for v in obj.values():
+                    collect_texts(v)
+            elif isinstance(obj, list) or isinstance(obj, tuple):
+                for v in obj:
+                    collect_texts(v)
+
+        collect_texts(message)
+        if not text_fragments:
+            return
+
+        joined = " ".join(text_fragments).lower()
+        # simple error indicators
+        error_indicators = ("unknown command", "unknown gcode", "error", "invalid", "not supported")
+        is_error = any(ind in joined for ind in error_indicators)
+        if not is_error:
+            return
+
+        # correlate to most recent pending command within 5 seconds
+        now = time.time()
+        window = 5.0
+        candidates = [p for p in self._pending_commands if now - p[1] <= window]
+        if not candidates:
+            return
+        # pick latest
+        cmd_log_id, ts, gcode = candidates[-1]
+        # remove it from pending
+        self._pending_commands = [p for p in self._pending_commands if p[0] != cmd_log_id]
+        resp_text = joined
+        for cb in list(self._command_listeners):
+            try:
+                cb(cmd_log_id, resp_text, True)
+            except Exception:
+                logger.exception("[OctoPrintGateway] command listener raised")
 
     # ------------------------------------------------------------------
     # Convenience passthroughs to OctoPrintClient
