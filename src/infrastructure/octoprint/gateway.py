@@ -96,6 +96,8 @@ class OctoPrintGateway:
         # Backoff control for repeated non-operational warnings
         self._last_nonop_warning: float = 0.0
         self._nonop_backoff_sec: float = OCTOPRINT_NONOP_WARN_BACKOFF_SEC
+        # Last textual response from a gateway command (for MQTT response field)
+        self._last_command_response: Optional[str] = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -181,6 +183,15 @@ class OctoPrintGateway:
         try:
             resp = self._client.pause_job()
             logger.debug("[OctoPrintGateway] pause_job response: %r", resp)
+            # store a textual representation for upstream MQTT responders
+            try:
+                if isinstance(resp, dict):
+                    # prefer message fields when present
+                    self._last_command_response = json.dumps(resp)
+                else:
+                    self._last_command_response = str(resp)
+            except Exception:
+                self._last_command_response = str(resp)
         except Exception:
             logger.exception("[OctoPrintGateway] pause_job request failed")
         # Verify
@@ -197,6 +208,9 @@ class OctoPrintGateway:
         logger.warning("[OctoPrintGateway] pause not observed via telemetry; falling back to M25")
         try:
             res = self.send("M25")
+            # capture response tuple from send
+            if getattr(res, "responses", None):
+                self._last_command_response = res.responses[-1] if len(res.responses) else None
             return res.succeeded
         except Exception:
             logger.exception("[OctoPrintGateway] fallback M25 failed")
@@ -206,6 +220,13 @@ class OctoPrintGateway:
         try:
             resp = self._client.resume_job()
             logger.debug("[OctoPrintGateway] resume_job response: %r", resp)
+            try:
+                if isinstance(resp, dict):
+                    self._last_command_response = json.dumps(resp)
+                else:
+                    self._last_command_response = str(resp)
+            except Exception:
+                self._last_command_response = str(resp)
         except Exception:
             logger.exception("[OctoPrintGateway] resume_job request failed")
         start = time.time()
@@ -221,6 +242,8 @@ class OctoPrintGateway:
         logger.warning("[OctoPrintGateway] resume not observed via telemetry; falling back to M24")
         try:
             res = self.send("M24")
+            if getattr(res, "responses", None):
+                self._last_command_response = res.responses[-1] if len(res.responses) else None
             return res.succeeded
         except Exception:
             logger.exception("[OctoPrintGateway] fallback M24 failed")
@@ -233,6 +256,13 @@ class OctoPrintGateway:
         try:
             resp = fn()
             logger.debug("[OctoPrintGateway] Job control %s response: %r", name, resp)
+            try:
+                if isinstance(resp, dict):
+                    self._last_command_response = json.dumps(resp)
+                else:
+                    self._last_command_response = str(resp)
+            except Exception:
+                self._last_command_response = str(resp)
             return True
         except Exception:
             logger.exception("[OctoPrintGateway] Job control failed: %s", name)

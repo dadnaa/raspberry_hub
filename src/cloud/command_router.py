@@ -112,6 +112,7 @@ class CommandRouter:
                         gcode=gcode,
                         status="SUCCESS",
                         commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
                     ))
                     logger.info("[Router] SUCCESS: %s (mapped M25 -> pause)", command_name)
                 else:
@@ -122,6 +123,7 @@ class CommandRouter:
                         status="ERROR",
                         reason="Gateway pause failed",
                         commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
                     ))
                     logger.warning("[Router] FAILED: %s - gateway pause failed", command_name)
 
@@ -148,6 +150,7 @@ class CommandRouter:
                         gcode=gcode,
                         status="SUCCESS",
                         commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
                     ))
                     logger.info("[Router] SUCCESS: %s (mapped M24 -> resume)", command_name)
                 else:
@@ -158,6 +161,7 @@ class CommandRouter:
                         status="ERROR",
                         reason="Gateway resume failed",
                         commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
                     ))
                     logger.warning("[Router] FAILED: %s - gateway resume failed", command_name)
 
@@ -187,8 +191,9 @@ class CommandRouter:
                         printerId=printer_id,
                         commandName=command_name,
                         gcode=gcode,
-                        status="SUCCESS",
+                            status="SUCCESS",
                         commandLogId=cmd.commandLogId,
+                            response=getattr(self._printer_gateway, "_last_command_response", None),
                     ))
                     logger.info("[Router] SUCCESS: %s (mapped -> cancel)", command_name)
                 else:
@@ -199,6 +204,7 @@ class CommandRouter:
                         status="ERROR",
                         reason="Gateway cancel failed",
                         commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
                     ))
                     logger.warning("[Router] FAILED: %s - gateway cancel failed", command_name)
 
