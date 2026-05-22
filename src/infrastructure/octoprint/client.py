@@ -89,6 +89,13 @@ class OctoPrintClient:
             parsed = urllib.parse.urlparse(source_url)
             filename = urllib.parse.unquote(parsed.path.split("/")[-1] or "upload.gcode")
 
+        # Ensure the filename has a recognized G-code extension; OctoPrint
+        # rejects unknown file types based on extension (HTTP 415 / invalid_file).
+        lower = filename.lower()
+        if not lower.endswith((".gcode", ".g", ".gco", ".gc", ".gcode.gz", ".gco.gz")):
+            logger.warning("[OctoPrintClient] Filename %s has unrecognized extension; appending .gcode", filename)
+            filename = filename + ".gcode"
+
         import uuid
 
         # Build a standards-compliant multipart/form-data body.
