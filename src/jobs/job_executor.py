@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from config.settings import JOB_PAUSE_POLL_INTERVAL_SEC
+from config.settings import JOB_PAUSE_POLL_INTERVAL_SEC, OCTOPRINT_PRINT_START_WAIT_SEC
 from src.jobs.job_model  import Job
 from src.jobs.job_store  import JobStore
 from src.core.models     import JobStateMessage
@@ -133,6 +134,35 @@ class JobExecutor:
             except Exception as exc:
                 job.mark_failed(reason=str(exc))
                 self._persist_and_publish(); self._fire_finished(); return
+
+            # Wait until OctoPrint reports the newly-selected file as active
+            # before marking the job as PRINTING. This avoids premature
+            # activation of vision/other systems when OctoPrint did not yet
+            # switch files or the cancellation of a previous job is still
+            # settling on the server.
+            start_wait = time.time()
+            selected = False
+            while time.time() - start_wait < OCTOPRINT_PRINT_START_WAIT_SEC:
+                try:
+                    status = get_job_fn()
+                except Exception:
+                    status = {}
+                # OctoPrint /api/job includes the selected file under
+                # the `job.file.name` path in many setups. Be defensive.
+                try:
+                    job_file = (
+                        (status.get("job") or {}).get("file") or {}
+                    ).get("name")
+                except Exception:
+                    job_file = None
+                if job_file and job_file == filename:
+                    selected = True
+                    break
+                # if state is not printing and no file yet, keep waiting
+                time.sleep(0.2)
+
+            if not selected:
+                logger.warning("[Executor] print_file reported ok but OctoPrint did not report %s as selected within %s seconds", filename, OCTOPRINT_PRINT_START_WAIT_SEC)
 
             job.mark_printing()
             self._persist_and_publish()

@@ -121,6 +121,14 @@ OCTOPRINT_STATUS_ERROR = {
 # request if another job is currently printing. The gateway will wait up
 # to this many seconds for the printer to become idle before failing.
 OCTOPRINT_PRINT_WAIT_SEC = 60
+# How long (seconds) to wait for OctoPrint to report the newly-selected
+# file as active after issuing a select+print. Prevents marking jobs as
+# PRINTING until OctoPrint telemetry confirms the new file is selected.
+OCTOPRINT_PRINT_START_WAIT_SEC = 10
+
+# How long (seconds) to wait for job-control changes (pause/resume) to
+# appear in OctoPrint telemetry before falling back to sending raw G-code.
+OCTOPRINT_JOB_CONTROL_VERIFY_SEC = 3
 
 
 # Jobs

@@ -21,6 +21,8 @@ from config.settings import (
     OCTOPRINT_STATUS_PAUSING,
     OCTOPRINT_STATUS_PRINTING,
     OCTOPRINT_PRINT_WAIT_SEC,
+    OCTOPRINT_PRINT_START_WAIT_SEC,
+    OCTOPRINT_JOB_CONTROL_VERIFY_SEC,
 )
 import os
 from src.core.printer_state import PrinterStatus
@@ -170,10 +172,55 @@ class OctoPrintGateway:
             )
 
     def pause(self) -> bool:
-        return self._job_control(self._client.pause_job, "pause")
+        # Ask OctoPrint to pause via REST, then verify via /api/job that the
+        # state moved to paused; otherwise fall back to sending M25.
+        try:
+            resp = self._client.pause_job()
+            logger.debug("[OctoPrintGateway] pause_job response: %r", resp)
+        except Exception:
+            logger.exception("[OctoPrintGateway] pause_job request failed")
+        # Verify
+        start = time.time()
+        while time.time() - start < OCTOPRINT_JOB_CONTROL_VERIFY_SEC:
+            try:
+                job = self._client.get_job()
+            except Exception:
+                job = {}
+            state = (job.get("state") or "").lower()
+            if state in (s.lower() for s in OCTOPRINT_STATUS_PAUSED) or state in (s.lower() for s in OCTOPRINT_STATUS_PAUSING):
+                return True
+            time.sleep(0.2)
+        logger.warning("[OctoPrintGateway] pause not observed via telemetry; falling back to M25")
+        try:
+            res = self.send("M25")
+            return res.succeeded
+        except Exception:
+            logger.exception("[OctoPrintGateway] fallback M25 failed")
+            return False
 
     def resume(self) -> bool:
-        return self._job_control(self._client.resume_job, "resume")
+        try:
+            resp = self._client.resume_job()
+            logger.debug("[OctoPrintGateway] resume_job response: %r", resp)
+        except Exception:
+            logger.exception("[OctoPrintGateway] resume_job request failed")
+        start = time.time()
+        while time.time() - start < OCTOPRINT_JOB_CONTROL_VERIFY_SEC:
+            try:
+                job = self._client.get_job()
+            except Exception:
+                job = {}
+            state = (job.get("state") or "").lower()
+            if state in (s.lower() for s in OCTOPRINT_STATUS_PRINTING):
+                return True
+            time.sleep(0.2)
+        logger.warning("[OctoPrintGateway] resume not observed via telemetry; falling back to M24")
+        try:
+            res = self.send("M24")
+            return res.succeeded
+        except Exception:
+            logger.exception("[OctoPrintGateway] fallback M24 failed")
+            return False
 
     def cancel(self) -> bool:
         return self._job_control(self._client.cancel_job, "cancel")
