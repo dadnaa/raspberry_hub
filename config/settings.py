@@ -117,6 +117,11 @@ OCTOPRINT_STATUS_ERROR = {
     "closed with error",
 }
 
+# When attempting to select & print a file, OctoPrint may reject the
+# request if another job is currently printing. The gateway will wait up
+# to this many seconds for the printer to become idle before failing.
+OCTOPRINT_PRINT_WAIT_SEC = 60
+
 
 # Jobs
 JOB_STORAGE_DIR = Path("data/jobs")

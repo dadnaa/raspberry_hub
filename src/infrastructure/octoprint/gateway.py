@@ -20,6 +20,7 @@ from config.settings import (
     OCTOPRINT_STATUS_PAUSED,
     OCTOPRINT_STATUS_PAUSING,
     OCTOPRINT_STATUS_PRINTING,
+    OCTOPRINT_PRINT_WAIT_SEC,
 )
 import os
 from src.core.printer_state import PrinterStatus
@@ -274,7 +275,40 @@ class OctoPrintGateway:
         try:
             self._client.print_file(filename)
             return True
-        except Exception:
+        except Exception as exc:
+            msg = str(exc)
+            # If OctoPrint reports that a job is already printing, wait until
+            # it finishes (bounded by OCTOPRINT_PRINT_WAIT_SEC) and retry.
+            if "409" in msg or "already printing" in msg.lower():
+                logger.warning("[OctoPrintGateway] print_file conflict for %s: %s — attempting to cancel current job and start new file", filename, msg)
+
+                # Try to cancel the running job first.
+                try:
+                    cancel_resp = self._client.cancel_job()
+                    logger.info("[OctoPrintGateway] cancel_job response: %r", cancel_resp)
+                except Exception:
+                    logger.exception("[OctoPrintGateway] cancel_job failed; will still attempt to wait for idle state")
+
+                # Wait until printer is no longer in PRINTING state, up to timeout.
+                wait_start = time.time()
+                while time.time() - wait_start < OCTOPRINT_PRINT_WAIT_SEC:
+                    try:
+                        job = self._client.get_job()
+                    except Exception:
+                        job = {}
+                    state = (job.get("state") or "").lower()
+                    if state not in (s.lower() for s in OCTOPRINT_STATUS_PRINTING):
+                        # Printer is idle or otherwise not printing; attempt to select and print the file.
+                        try:
+                            self._client.print_file(filename)
+                            return True
+                        except Exception as exc2:
+                            logger.warning("[OctoPrintGateway] Retry select/print failed after cancel: %s", exc2)
+                            return False
+                    time.sleep(self._poll_interval_sec)
+
+                logger.error("[OctoPrintGateway] print_file timed out waiting for printer to become idle after cancel attempt")
+                return False
             logger.exception("[OctoPrintGateway] print_file failed.")
             return False
 
