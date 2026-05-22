@@ -25,6 +25,7 @@ class CommandRouter:
         validator: MessageValidator,
         printer_gateway=None,
         command_engine=None,
+        job_manager=None,
     ) -> None:
         gateway = printer_gateway if printer_gateway is not None else command_engine
         if gateway is None:
@@ -34,6 +35,7 @@ class CommandRouter:
         self._pub = publisher
         self._val = validator
         self._printer_gateway = gateway
+        self._job_manager = job_manager
 
     def handle_command(self, payload: str) -> None:
         """Handle printer/{id}/command messages."""
@@ -94,6 +96,14 @@ class CommandRouter:
                     logger.exception("[Router] Exception calling gateway.pause(): %s", exc)
 
                 if ok:
+                    # If we have a JobManager, mark the active job paused.
+                    try:
+                        if hasattr(self, "_job_manager") and self._job_manager:
+                            active = self._job_manager.active_job
+                            if active:
+                                self._job_manager.pause(active.job_id)
+                    except Exception:
+                        logger.exception("[Router] Failed to pause active job in JobManager.")
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
                         commandName=command_name,
@@ -120,6 +130,14 @@ class CommandRouter:
                     logger.exception("[Router] Exception calling gateway.resume(): %s", exc)
 
                 if ok:
+                    # If we have a JobManager, mark the active job resumed.
+                    try:
+                        if hasattr(self, "_job_manager") and self._job_manager:
+                            active = self._job_manager.active_job
+                            if active:
+                                self._job_manager.resume(active.job_id)
+                    except Exception:
+                        logger.exception("[Router] Failed to resume active job in JobManager.")
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
                         commandName=command_name,
@@ -136,6 +154,45 @@ class CommandRouter:
                         reason="Gateway resume failed",
                     ))
                     logger.warning("[Router] FAILED: %s - gateway resume failed", command_name)
+
+            elif (
+                g_upper.startswith("M112")
+                or g_upper.startswith("M0")
+                or g_upper.startswith("M18")
+                or g_upper.startswith("M410")
+                or command_name.strip().lower() in ("cancel", "stop", "stop-job")
+            ):
+                ok = False
+                try:
+                    if hasattr(self._printer_gateway, "cancel"):
+                        ok = self._printer_gateway.cancel()
+                except Exception as exc:
+                    logger.exception("[Router] Exception calling gateway.cancel(): %s", exc)
+
+                if ok:
+                    try:
+                        if hasattr(self, "_job_manager") and self._job_manager:
+                            active = self._job_manager.active_job
+                            if active:
+                                self._job_manager.cancel(active.job_id)
+                    except Exception:
+                        logger.exception("[Router] Failed to cancel active job in JobManager.")
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="SUCCESS",
+                    ))
+                    logger.info("[Router] SUCCESS: %s (mapped -> cancel)", command_name)
+                else:
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="ERROR",
+                        reason="Gateway cancel failed",
+                    ))
+                    logger.warning("[Router] FAILED: %s - gateway cancel failed", command_name)
 
             else:
                 result = self._printer_gateway.send(gcode)

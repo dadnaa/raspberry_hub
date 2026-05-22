@@ -73,18 +73,19 @@ class MQTTBridge:
         self._topics = MQTTTopics(self._mqtt.printer_id)
         self._pub    = MQTTPublisher(self._mqtt, self._topics)
         self._val    = MessageValidator(self._mqtt.printer_id)
-        self._router = CommandRouter(
-            topics=self._topics,
-            publisher=self._pub,
-            validator=self._val,
-            printer_gateway=gateway,
-        )
-
         # JobManager — created here if not injected
         self._jobs = job_manager or JobManager(
             printer_gateway=gateway,
             publish_state=self._pub.job_state,
             printer_id=self._mqtt.printer_id,
+        )
+
+        self._router = CommandRouter(
+            topics=self._topics,
+            publisher=self._pub,
+            validator=self._val,
+            printer_gateway=gateway,
+            job_manager=self._jobs,
         )
 
         self._stop_event = threading.Event()
