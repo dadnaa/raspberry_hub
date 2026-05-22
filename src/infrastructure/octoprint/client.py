@@ -89,16 +89,24 @@ class OctoPrintClient:
             parsed = urllib.parse.urlparse(source_url)
             filename = urllib.parse.unquote(parsed.path.split("/")[-1] or "upload.gcode")
 
-        boundary = "----OctoPrintBoundary"
-        crlf = "\r\n"
-        parts = []
-        parts.append(f"--{boundary}")
-        parts.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"')
-        parts.append("Content-Type: application/octet-stream")
-        parts.append("")
-        body_head = crlf.join(parts).encode("utf-8") + crlf.encode("utf-8")
-        body_tail = crlf.encode("utf-8") + f"--{boundary}--".encode("utf-8") + crlf.encode("utf-8")
-        body = body_head + content + body_tail
+        import uuid
+
+        # Build a standards-compliant multipart/form-data body.
+        # Use a boundary without leading dashes and include Content-Transfer-Encoding.
+        boundary = uuid.uuid4().hex
+        boundary_bytes = boundary.encode("utf-8")
+        crlf = b"\r\n"
+
+        head_lines = []
+        head_lines.append(b"--" + boundary_bytes)
+        head_lines.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode("utf-8"))
+        head_lines.append(b"Content-Type: application/octet-stream")
+        head_lines.append(b"Content-Transfer-Encoding: binary")
+        head = crlf.join(head_lines) + crlf + crlf
+
+        tail = crlf + b"--" + boundary_bytes + b"--" + crlf
+
+        body = head + content + tail
 
         headers = {
             "X-Api-Key": self._api_key,
