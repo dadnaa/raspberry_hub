@@ -27,7 +27,7 @@ from config.settings import (
 import os
 from src.core.printer_state import PrinterStatus
 from src.core.state_manager import StateManager
-from src.infrastructure.octoprint.client import OctoPrintClient
+from src.infrastructure.octoprint.client import OctoPrintClient, OctoPrintError
 from src.infrastructure.octoprint.event_stream import OctoPrintEventStream
 
 logger = logging.getLogger(__name__)
@@ -244,6 +244,17 @@ class OctoPrintGateway:
         try:
             printer = self._client.get_printer()
             job = self._client.get_job()
+        except OctoPrintError as e:
+            msg = str(e)
+            # OctoPrint may return 409 with a JSON error when the printer
+            # is not operational. Treat that as ERROR without spamming stacktraces.
+            if "409" in msg or "not operational" in msg.lower():
+                logger.warning("[OctoPrintGateway] Printer not operational: %s", msg)
+                self._state.update(status=PrinterStatus.ERROR)
+                return
+            logger.exception("[OctoPrintGateway] Telemetry poll failed.")
+            self._state.update(status=PrinterStatus.ERROR)
+            return
         except Exception:
             logger.exception("[OctoPrintGateway] Telemetry poll failed.")
             self._state.update(status=PrinterStatus.ERROR)
