@@ -206,12 +206,17 @@ class CommandRouter:
                 result = self._printer_gateway.send(gcode)
 
                 if result.succeeded:
+                    # Use the last response line from the gateway if available
+                    last_resp = None
+                    if getattr(result, "responses", None):
+                        last_resp = result.responses[-1] if len(result.responses) else None
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
                         commandName=command_name,
                         gcode=gcode,
                         status="SUCCESS",
                         commandLogId=cmd.commandLogId,
+                        response=last_resp,
                     ))
                     logger.info(
                         "[Router] SUCCESS: %s in %.1fms",
@@ -220,6 +225,11 @@ class CommandRouter:
                     )
                 else:
                     reason = f"Gateway status: {result.status.name}"
+                    # Prefer explicit error_message, otherwise last response
+                    last_resp = None
+                    if getattr(result, "responses", None):
+                        last_resp = result.responses[-1] if len(result.responses) else None
+                    resp_text = result.error_message or last_resp
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
                         commandName=command_name,
@@ -227,6 +237,7 @@ class CommandRouter:
                         status="ERROR",
                         reason=reason,
                         commandLogId=cmd.commandLogId,
+                        response=resp_text,
                     ))
                     logger.warning("[Router] FAILED: %s - %s", command_name, reason)
 

@@ -124,6 +124,7 @@ class CommandResponseMessage:
     gcode:       str
     status:      CommandStateStatus
     commandLogId: str
+    response:    Optional[str] = None
     reason:      Optional[str] = None
     timestamp:   Optional[str] = None
 
