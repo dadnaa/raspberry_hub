@@ -118,6 +118,73 @@ class JobExecutor:
             job.mark_cancelled()
             self._persist_and_publish(); self._fire_finished(); return
 
+        # If the gateway exposes file upload/print methods, use the higher-level flow
+        upload_fn = getattr(self._printer_gateway, "upload_file", None)
+        print_fn = getattr(self._printer_gateway, "print_file", None)
+        get_job_fn = getattr(self._printer_gateway, "get_job", None)
+        if upload_fn and print_fn and get_job_fn:
+            job.mark_loading()
+            self._persist_and_publish()
+            try:
+                filename = upload_fn(job.file_url)
+                ok = print_fn(filename)
+                if not ok:
+                    raise RuntimeError("print_file request failed")
+            except Exception as exc:
+                job.mark_failed(reason=str(exc))
+                self._persist_and_publish(); self._fire_finished(); return
+
+            job.mark_printing()
+            self._persist_and_publish()
+
+            try:
+                # Poll OctoPrint job state for progress/completion
+                while True:
+                    if self._fail_event.is_set():
+                        self._fail_job()
+                        return
+
+                    if self._cancel_event.is_set():
+                        self._safe_stop(); job.mark_cancelled()
+                        self._persist_and_publish(); self._fire_finished(); return
+
+                    try:
+                        status = get_job_fn()
+                    except Exception:
+                        status = {}
+
+                    completion = None
+                    try:
+                        completion = status.get("progress", {}).get("completion")
+                    except Exception:
+                        completion = None
+
+                    if completion is not None:
+                        try:
+                            pct = float(completion)
+                        except Exception:
+                            pct = 0.0
+                        job.progress = round(min(100.0, pct), 2)
+                        # approximate current line index from completion
+                        if job.total_lines > 0:
+                            job.current_line_index = int(round((job.progress / 100.0) * job.total_lines))
+                        self._persist_and_publish()
+
+                    if completion is not None and float(completion) >= 100.0:
+                        if not self._cancel_event.is_set() and not self._fail_event.is_set():
+                            job.mark_completed()
+                            self._persist_and_publish(); self._fire_finished()
+                        return
+
+                    time.sleep(_COMMAND_YIELD_SEC)
+
+            except Exception as exc:
+                logger.exception(f"[Executor] Unexpected during file-print: {exc}")
+                job.mark_failed(reason=str(exc))
+                self._persist_and_publish(); self._fire_finished()
+            return
+
+        # Fallback: stream G-code lines directly (legacy behavior)
         job.mark_printing()
         self._persist_and_publish()
 

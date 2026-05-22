@@ -91,19 +91,43 @@ class OctoPrintGateway:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._poll_loop,
-            name="OctoPrintTelemetry",
-            daemon=True,
-        )
-        self._thread.start()
+
+        # If websocket mode is enabled, attempt to use the event stream.
+        # Perform one initial REST poll to prime state, then start the
+        # websocket. If the websocket client is not available, fall back
+        # to the REST poll loop.
         if _websocket_enabled():
             self._event_stream = OctoPrintEventStream(
                 base_url=self._client.base_url,
                 api_key=self._client.api_key,
                 on_message=self._handle_event,
             )
-            self._event_stream.start()
+            ws_started = self._event_stream.start()
+            try:
+                self.poll_once()
+            except Exception:
+                logger.exception("[OctoPrintGateway] Initial telemetry poll failed.")
+
+            if not ws_started:
+                # websocket requested but not available; use REST polling
+                self._thread = threading.Thread(
+                    target=self._poll_loop,
+                    name="OctoPrintTelemetry",
+                    daemon=True,
+                )
+                self._thread.start()
+                logger.info("[OctoPrintGateway] Websocket unavailable; started REST telemetry polling.")
+            else:
+                logger.info("[OctoPrintGateway] Started telemetry via websocket.")
+            return
+
+        # Default: REST polling
+        self._thread = threading.Thread(
+            target=self._poll_loop,
+            name="OctoPrintTelemetry",
+            daemon=True,
+        )
+        self._thread.start()
         logger.info("[OctoPrintGateway] Started telemetry polling.")
 
     def stop(self) -> None:
@@ -229,6 +253,34 @@ class OctoPrintGateway:
             updates["progress_pct"] = round(float(completion), 2)
 
         self._state.update(**updates)
+
+    # ------------------------------------------------------------------
+    # Convenience passthroughs to OctoPrintClient
+    # ------------------------------------------------------------------
+    def upload_file(self, source_url: str, target_name: Optional[str] = None) -> str:
+        """Download and upload a file to OctoPrint local storage via client."""
+        try:
+            return self._client.upload_file(source_url, target_name)
+        except Exception:
+            logger.exception("[OctoPrintGateway] upload_file failed.")
+            raise
+
+    def print_file(self, filename: str) -> bool:
+        """Select and start printing a file already uploaded to OctoPrint."""
+        try:
+            self._client.print_file(filename)
+            return True
+        except Exception:
+            logger.exception("[OctoPrintGateway] print_file failed.")
+            return False
+
+    def get_job(self) -> dict:
+        """Return OctoPrint /api/job payload (or empty dict on failure)."""
+        try:
+            return self._client.get_job()
+        except Exception:
+            logger.exception("[OctoPrintGateway] get_job failed.")
+            return {}
 
 
 class MockGateway:

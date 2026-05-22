@@ -49,7 +49,8 @@ class OctoPrintClient:
         return self._request("GET", "/api/job")
 
     def send_gcode(self, command: str) -> None:
-        self._request("POST", "/api/printer/command", {"command": command})
+        # OctoPrint expects an array of commands under the `commands` key.
+        self._request("POST", "/api/printer/command", {"commands": [command]})
 
     def pause_job(self) -> None:
         self._request("POST", "/api/job", {"command": "pause", "action": "pause"})
@@ -67,6 +68,74 @@ class OctoPrintClient:
         if baudrate:
             payload["baudrate"] = baudrate
         self._request("POST", "/api/connection", payload)
+
+    def upload_file(self, source_url: str, target_name: Optional[str] = None) -> str:
+        """Download a G-code file from `source_url` and upload it to OctoPrint's local files.
+
+        Returns the filename stored in OctoPrint (basename used when `target_name` not provided).
+        Raises OctoPrintError on failure.
+        """
+        # Download source
+        try:
+            with urllib.request.urlopen(source_url, timeout=self._timeout_sec) as resp:
+                content = resp.read()
+        except Exception as exc:
+            raise OctoPrintError(f"Failed to fetch source file: {exc}") from exc
+
+        # Determine filename
+        if target_name:
+            filename = target_name
+        else:
+            parsed = urllib.parse.urlparse(source_url)
+            filename = urllib.parse.unquote(parsed.path.split("/")[-1] or "upload.gcode")
+
+        boundary = "----OctoPrintBoundary"
+        crlf = "\r\n"
+        parts = []
+        parts.append(f"--{boundary}")
+        parts.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"')
+        parts.append("Content-Type: application/octet-stream")
+        parts.append("")
+        body_head = crlf.join(parts).encode("utf-8") + crlf.encode("utf-8")
+        body_tail = crlf.encode("utf-8") + f"--{boundary}--".encode("utf-8") + crlf.encode("utf-8")
+        body = body_head + content + body_tail
+
+        headers = {
+            "X-Api-Key": self._api_key,
+            "Accept": "application/json",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+
+        url = urllib.parse.urljoin(f"{self._base_url}/", "/api/files/local")
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout_sec) as response:
+                raw = response.read()
+                if not raw:
+                    return filename
+                content_type = response.headers.get("Content-Type", "")
+                if "json" not in content_type:
+                    return filename
+                data = json.loads(raw.decode("utf-8"))
+                # Return the filename we uploaded (best-effort)
+                return filename
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise OctoPrintError(f"OctoPrint HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise OctoPrintError(f"OctoPrint request failed: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise OctoPrintError("OctoPrint request timed out") from exc
+
+    def print_file(self, filename: str) -> dict[str, Any]:
+        """Select and start printing a file already uploaded to OctoPrint local storage.
+
+        `filename` should be the basename under OctoPrint's local files storage.
+        Returns the OctoPrint response as a dict.
+        """
+        path = "/api/files/local/" + urllib.parse.quote(filename, safe="")
+        payload = {"command": "select", "print": True}
+        return self._request("POST", path, payload)
 
     def _request(
         self,

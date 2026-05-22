@@ -12,6 +12,8 @@ import logging
 import threading
 import time
 from typing import Callable, Optional
+import urllib.request
+import urllib.parse
 from urllib.parse import urlparse, urlunparse
 
 from config.settings import OCTOPRINT_WEBSOCKET_RECONNECT_SEC
@@ -27,6 +29,7 @@ class OctoPrintEventStream:
         on_message: Callable[[dict], None],
         reconnect_sec: float = OCTOPRINT_WEBSOCKET_RECONNECT_SEC,
     ) -> None:
+        self._base_url = base_url
         self._url = _websocket_url(base_url)
         self._api_key = api_key
         self._on_message = on_message
@@ -62,13 +65,35 @@ class OctoPrintEventStream:
 
     def _run(self) -> None:
         import websocket
-
         headers = [f"X-Api-Key: {self._api_key}"]
         while not self._stop_event.is_set():
             ws = None
             try:
+                # First perform passive login to obtain SockJS session credentials.
+                login_url = urllib.parse.urljoin(self._base_url, f"/api/login?passive=true&apikey={urllib.parse.quote(self._api_key)}")
+                name = None
+                session = None
+                try:
+                    with urllib.request.urlopen(login_url, timeout=10) as resp:
+                        raw = resp.read()
+                        if raw:
+                            data = json.loads(raw.decode("utf-8"))
+                            name = data.get("name")
+                            session = data.get("session")
+                except Exception:
+                    logger.exception("[OctoPrintEventStream] Passive login failed.")
+
                 ws = websocket.create_connection(self._url, header=headers, timeout=10)
                 logger.info("[OctoPrintEventStream] Connected: %s", self._url)
+                # If we obtained credentials, send SockJS auth message.
+                if name and session:
+                    try:
+                        auth_obj = {"auth": f"{name}:{session}"}
+                        # SockJS expects an array of stringified messages.
+                        msg = json.dumps([json.dumps(auth_obj)])
+                        ws.send(msg)
+                    except Exception:
+                        logger.exception("[OctoPrintEventStream] Failed to send SockJS auth message.")
                 while not self._stop_event.is_set():
                     raw = ws.recv()
                     for message in _decode_sockjs(raw):
