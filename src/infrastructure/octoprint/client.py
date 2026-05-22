@@ -100,47 +100,62 @@ class OctoPrintClient:
 
         # Build a standards-compliant multipart/form-data body.
         # Use a boundary without leading dashes and include Content-Transfer-Encoding.
-        boundary = uuid.uuid4().hex
-        boundary_bytes = boundary.encode("utf-8")
-        crlf = b"\r\n"
-
-        head_lines = []
-        head_lines.append(b"--" + boundary_bytes)
-        head_lines.append(f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode("utf-8"))
-        head_lines.append(b"Content-Type: application/octet-stream")
-        head_lines.append(b"Content-Transfer-Encoding: binary")
-        head = crlf.join(head_lines) + crlf + crlf
-
-        tail = crlf + b"--" + boundary_bytes + b"--" + crlf
-
-        body = head + content + tail
-
-        headers = {
-            "X-Api-Key": self._api_key,
-            "Accept": "application/json",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        }
-
         url = urllib.parse.urljoin(f"{self._base_url}/", "/api/files/local")
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=self._timeout_sec) as response:
-                raw = response.read()
-                if not raw:
-                    return filename
-                content_type = response.headers.get("Content-Type", "")
-                if "json" not in content_type:
-                    return filename
-                data = json.loads(raw.decode("utf-8"))
-                # Return the filename we uploaded (best-effort)
-                return filename
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise OctoPrintError(f"OctoPrint HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise OctoPrintError(f"OctoPrint request failed: {exc.reason}") from exc
-        except TimeoutError as exc:
-            raise OctoPrintError("OctoPrint request timed out") from exc
+
+        attempts = 3
+        for attempt in range(attempts):
+            # If first attempt, try original filename; otherwise append unique suffix
+            if attempt == 0:
+                current_name = filename
+            else:
+                import os
+                base, ext = os.path.splitext(filename)
+                current_name = f"{base}-{uuid.uuid4().hex}{ext}"
+
+            boundary = uuid.uuid4().hex
+            boundary_bytes = boundary.encode("utf-8")
+            crlf = b"\r\n"
+
+            head_lines = []
+            head_lines.append(b"--" + boundary_bytes)
+            head_lines.append(f'Content-Disposition: form-data; name="file"; filename="{current_name}"'.encode("utf-8"))
+            head_lines.append(b"Content-Type: application/octet-stream")
+            head_lines.append(b"Content-Transfer-Encoding: binary")
+            head = crlf.join(head_lines) + crlf + crlf
+
+            tail = crlf + b"--" + boundary_bytes + b"--" + crlf
+
+            body = head + content + tail
+
+            headers = {
+                "X-Api-Key": self._api_key,
+                "Accept": "application/json",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            }
+
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout_sec) as response:
+                    raw = response.read()
+                    if not raw:
+                        return current_name
+                    content_type = response.headers.get("Content-Type", "")
+                    if "json" not in content_type:
+                        return current_name
+                    data = json.loads(raw.decode("utf-8"))
+                    return current_name
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                # If file is currently being printed, OctoPrint returns 409 CONFLICT.
+                # Retry with a unique filename to avoid overwrite conflict.
+                if exc.code == 409 and attempt < attempts - 1:
+                    logger.warning("[OctoPrintClient] Upload conflict for %s: %s — retrying with new name", current_name, detail)
+                    continue
+                raise OctoPrintError(f"OctoPrint HTTP {exc.code}: {detail}") from exc
+            except urllib.error.URLError as exc:
+                raise OctoPrintError(f"OctoPrint request failed: {exc.reason}") from exc
+            except TimeoutError as exc:
+                raise OctoPrintError("OctoPrint request timed out") from exc
 
     def print_file(self, filename: str) -> dict[str, Any]:
         """Select and start printing a file already uploaded to OctoPrint local storage.
