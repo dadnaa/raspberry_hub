@@ -110,6 +110,19 @@ def main() -> None:
 
     def _shutdown(sig, frame):
         logger.info("[Main] Signal %s - shutting down.", sig)
+        # Attempt to cancel any active job immediately so it is not resumed
+        # when the system restarts.
+        try:
+            if bridge and hasattr(bridge, "job_manager"):
+                try:
+                    active = bridge.job_manager.active_job
+                    if active and not active.is_terminal:
+                        logger.info(f"[Main] Shutdown: cancelling active job {active.job_id}")
+                        bridge.job_manager.cancel(active.job_id)
+                except Exception:
+                    logger.exception("[Main] Error cancelling active job during shutdown.")
+        except Exception:
+            logger.exception("[Main] Error during shutdown job-cancel check.")
         stop.set()
 
     signal.signal(signal.SIGINT, _shutdown)
