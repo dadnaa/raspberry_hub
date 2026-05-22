@@ -45,6 +45,8 @@ class MQTTPublisher:
     def __init__(self, client: MQTTClient, topics: MQTTTopics) -> None:
         self._client = client
         self._topics = topics
+        # Cache last published job-state per jobId to avoid duplicate MQTT messages
+        self._last_job_state: dict[str, tuple] = {}
 
     def handshake(self, msg: HandshakeMessage) -> None:
         payload = msg.to_json()
@@ -57,6 +59,22 @@ class MQTTPublisher:
         logger.debug(f"[Publisher] printer-state: {msg.status}")
 
     def job_state(self, msg: JobStateMessage) -> None:
+        # Build a stable key for deduplication
+        key = (
+            msg.jobId,
+            msg.status,
+            float(msg.progress or 0.0),
+            msg.startedAt,
+            msg.finishedAt,
+            msg.estimatedTime,
+            msg.reason,
+        )
+        last = self._last_job_state.get(msg.jobId)
+        if last == key:
+            logger.debug("[Publisher] job-state unchanged for %s; skipping publish", msg.jobId)
+            return
+        self._last_job_state[msg.jobId] = key
+
         payload = msg.to_json()
         self._client.publish(self._topics.job_state, payload)
         logger.debug(f"[Publisher] job-state: {msg.status} ({msg.progress:.1f}%)")

@@ -65,6 +65,8 @@ class JobExecutor:
         self._fail_event   = threading.Event()
         self._fail_reason: Optional[str] = None
         self._thread:      Optional[threading.Thread] = None
+        # last published key to avoid emitting duplicate MQTT messages
+        self._last_published_key: Optional[tuple] = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -271,6 +273,20 @@ class JobExecutor:
         job = self._job
         try: self._store.save(job)
         except Exception: logger.exception("[Executor] Persist failed.")
+
+        # Avoid publishing identical job-state repeatedly (e.g., while paused).
+        publish_key = (
+            job.mqtt_status,
+            float(job.progress or 0.0),
+            job.current_line_index,
+            job.started_at,
+            job.finished_at,
+        )
+        if publish_key == self._last_published_key:
+            # nothing changed — skip MQTT publish
+            return
+
+        self._last_published_key = publish_key
 
         msg = JobStateMessage(
             jobId=job.job_id, printerId=self._printer_id,
