@@ -108,8 +108,10 @@ class MessageValidator:
         if not gcode or not isinstance(gcode, str):
             raise ValidationError("gcode field is empty or not a string.")
         cmd = gcode.strip().upper()
-        if not any(cmd.startswith(prefix) for prefix in _ALLOWED_GCODE_PREFIXES):
-            raise ValidationError(
-                f"G-code not on whitelist: {gcode!r}. "
-                f"Allowed prefixes: {_ALLOWED_GCODE_PREFIXES}"
-            )
+        # If the whitelist is empty, allow all G-code commands.
+        if _ALLOWED_GCODE_PREFIXES:
+            if not any(cmd.startswith(prefix) for prefix in _ALLOWED_GCODE_PREFIXES):
+                raise ValidationError(
+                    f"G-code not on whitelist: {gcode!r}. "
+                    f"Allowed prefixes: {_ALLOWED_GCODE_PREFIXES}"
+                )

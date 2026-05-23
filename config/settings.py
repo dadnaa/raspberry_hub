@@ -78,20 +78,8 @@ MQTT_BACKOFF_MAX_SEC = 60.0
 MQTT_OUTBOX_MAXSIZE = 256
 MQTT_KEEPALIVE_SEC = 30
 MQTT_STATE_PUBLISH_INTERVAL_SEC = 10.0
-MQTT_ALLOWED_GCODE_PREFIXES = (
-    "M104", "M109", "M140", "M190",
-    "M105",
-    "M106", "M107",
-    "M112", "M108",
-    "M84",
-    "M114",
-    "M115",
-    "G0", "G1",
-    "G28",
-    "G29",
-    "G90", "G91", "G92",
-    "M25", "M24",
-)
+# Empty tuple disables G-code prefix filtering; set to allowed prefixes to re-enable
+MQTT_ALLOWED_GCODE_PREFIXES = ()
 MQTT_REQUIRED_COMMAND_FIELDS = {"printerId", "commandName", "gcode", "commandLogId"}
 MQTT_REQUIRED_START_JOB_FIELDS = {"printerId", "commandName", "jobId", "fileUrl"}
 
