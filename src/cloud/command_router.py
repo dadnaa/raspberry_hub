@@ -36,7 +36,7 @@ class CommandRouter:
         self._val = validator
         self._printer_gateway = gateway
         self._job_manager = job_manager
-        # pending command results: commandLogId -> {'event': Event, 'resp': str, 'is_error': bool}
+        # pending command results: commandLogId -> {'printer_id', 'command_name', 'gcode'}
         self._pending_results: dict[str, dict] = {}
         # register for gateway command notifications when supported
         try:
@@ -78,44 +78,32 @@ class CommandRouter:
         command_name = cmd.commandName
         gcode = cmd.gcode
 
-        def _start_terminal_waiter(result=None) -> None:
-            from threading import Event
-
-            ev = Event()
+        def _track_terminal_response(timeout_sec: float = 5.0) -> None:
             self._pending_results[cmd.commandLogId] = {
-                "event": ev,
-                "resp": None,
-                "is_error": False,
+                "printer_id": printer_id,
+                "command_name": command_name,
+                "gcode": gcode,
             }
 
-            def _wait_and_publish() -> None:
-                ev.wait(5.0)
+            def _timeout() -> None:
+                if timeout_sec <= 0:
+                    return
+                time.sleep(timeout_sec)
                 info = self._pending_results.pop(cmd.commandLogId, None)
-                if info and info.get("resp"):
-                    status = "ERROR" if info.get("is_error") else "SUCCESS"
-                    self._pub.command_response(CommandResponseMessage(
-                        printerId=printer_id,
-                        commandName=command_name,
-                        gcode=gcode,
-                        status=status,
-                        commandLogId=cmd.commandLogId,
-                        response=info.get("resp"),
-                        reason=info.get("resp") if info.get("is_error") else None,
-                    ))
-                    logger.info("[Router] %s: %s", status, command_name)
-                else:
-                    self._pub.command_response(CommandResponseMessage(
-                        printerId=printer_id,
-                        commandName=command_name,
-                        gcode=gcode,
-                        status="TIMEOUT",
-                        commandLogId=cmd.commandLogId,
-                        response="timeout",
-                        reason="No terminal response",
-                    ))
-                    logger.warning("[Router] TIMEOUT: %s", command_name)
+                if not info:
+                    return
+                self._pub.command_response(CommandResponseMessage(
+                    printerId=info.get("printer_id"),
+                    commandName=info.get("command_name"),
+                    gcode=info.get("gcode"),
+                    status="TIMEOUT",
+                    commandLogId=cmd.commandLogId,
+                    response="timeout",
+                    reason="No terminal response",
+                ))
+                logger.warning("[Router] TIMEOUT: %s", cmd.commandLogId)
 
-            threading.Thread(target=_wait_and_publish, daemon=True).start()
+            threading.Thread(target=_timeout, daemon=True).start()
 
         self._pub.command_response(CommandResponseMessage(
             printerId=printer_id,
@@ -139,11 +127,6 @@ class CommandRouter:
             if g_upper.startswith("M25"):
                 ok = False
                 try:
-                    if hasattr(self._printer_gateway, "track_pending_command"):
-                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
-                except Exception:
-                    logger.exception("[Router] Failed to track pending command on gateway")
-                try:
                     if hasattr(self._printer_gateway, "pause"):
                         ok = self._printer_gateway.pause()
                 except Exception as exc:
@@ -163,7 +146,7 @@ class CommandRouter:
                             self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
                     except Exception:
                         logger.exception("[Router] Failed to track pending command on gateway")
-                    _start_terminal_waiter()
+                    _track_terminal_response()
                 else:
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
@@ -178,11 +161,6 @@ class CommandRouter:
 
             elif g_upper.startswith("M24"):
                 ok = False
-                try:
-                    if hasattr(self._printer_gateway, "track_pending_command"):
-                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
-                except Exception:
-                    logger.exception("[Router] Failed to track pending command on gateway")
                 try:
                     if hasattr(self._printer_gateway, "resume"):
                         ok = self._printer_gateway.resume()
@@ -203,7 +181,7 @@ class CommandRouter:
                             self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
                     except Exception:
                         logger.exception("[Router] Failed to track pending command on gateway")
-                    _start_terminal_waiter()
+                    _track_terminal_response()
                 else:
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
@@ -225,11 +203,6 @@ class CommandRouter:
             ):
                 ok = False
                 try:
-                    if hasattr(self._printer_gateway, "track_pending_command"):
-                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
-                except Exception:
-                    logger.exception("[Router] Failed to track pending command on gateway")
-                try:
                     if hasattr(self._printer_gateway, "cancel"):
                         ok = self._printer_gateway.cancel()
                 except Exception as exc:
@@ -248,7 +221,7 @@ class CommandRouter:
                             self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
                     except Exception:
                         logger.exception("[Router] Failed to track pending command on gateway")
-                    _start_terminal_waiter()
+                    _track_terminal_response()
                 else:
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
@@ -262,14 +235,13 @@ class CommandRouter:
                     logger.warning("[Router] FAILED: %s - gateway cancel failed", command_name)
 
             else:
+                result = self._printer_gateway.send(gcode)
                 try:
                     if hasattr(self._printer_gateway, "track_pending_command"):
                         self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
                 except Exception:
                     logger.exception("[Router] Failed to track pending command on gateway")
-
-                result = self._printer_gateway.send(gcode)
-                _start_terminal_waiter(result)
+                _track_terminal_response()
 
         except Exception as exc:
             reason = str(exc)
@@ -288,12 +260,17 @@ class CommandRouter:
         command is discovered. Marks the pending waiter so the router thread
         can publish an ERROR state immediately.
         """
-        info = self._pending_results.get(command_log_id)
+        info = self._pending_results.pop(command_log_id, None)
         if not info:
             return
-        info["resp"] = resp_text
-        info["is_error"] = bool(is_error)
-        try:
-            info["event"].set()
-        except Exception:
-            logger.exception("[Router] Failed setting pending event for %s", command_log_id)
+        status = "ERROR" if is_error else "SUCCESS"
+        self._pub.command_response(CommandResponseMessage(
+            printerId=info.get("printer_id"),
+            commandName=info.get("command_name"),
+            gcode=info.get("gcode"),
+            status=status,
+            commandLogId=command_log_id,
+            response=resp_text,
+            reason=resp_text if is_error else None,
+        ))
+        logger.info("[Router] %s: %s", status, command_log_id)
