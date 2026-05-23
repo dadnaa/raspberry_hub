@@ -118,6 +118,7 @@ def main():
         command_engine=command_engine,
         state_manager=state_manager,
         printer_config=PRINTER_CONFIG,
+        telemetry_engine=telemetry,
     )
 
     # ── 7. Vision layer ───────────────────────────────────────────────

@@ -201,7 +201,14 @@ class JobExecutor:
     def _safe_stop(self) -> None:
         cmds = []
         if self._preserve_pause:
+            # Preserve pause: ensure printer remains paused (M25)
             cmds.append("M25")
+        else:
+            # Do not preserve pause: send M24 to resume if paused so the
+            # subsequent shutdown commands leave the device IDLE rather
+            # than stuck in a PAUSED state. Sending M24 when not paused
+            # is harmless on most firmwares.
+            cmds.append("M24")
         cmds.extend(("M104 S0", "M140 S0", "M84"))
         for cmd in cmds:
             try: self._engine.send(cmd)
