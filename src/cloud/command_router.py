@@ -17,6 +17,7 @@ CRITICAL: No direct serial writes happen here.
 
 import logging
 import threading
+import time
 from typing import Optional
 
 from src.core.models import (

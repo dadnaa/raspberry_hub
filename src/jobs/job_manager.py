@@ -117,6 +117,13 @@ class JobManager:
                 return False
             if self._executor:
                 self._executor.pause()
+                # Publish and log printer/job status
+                try:
+                    self._publish_state(self._active)
+                except Exception:
+                    logger.exception("[JobManager] Failed to publish state after pause.")
+                logger.info("job status:: paused")
+                logger.info("printer status :paused")
                 return True
         return False
 
@@ -128,6 +135,13 @@ class JobManager:
                 return False
             if self._executor:
                 self._executor.resume()
+                # Publish and log printer/job status
+                try:
+                    self._publish_state(self._active)
+                except Exception:
+                    logger.exception("[JobManager] Failed to publish state after resume.")
+                logger.info("job status printing")
+                logger.info("printer status :printing")
                 return True
         return False
 
@@ -143,7 +157,14 @@ class JobManager:
             if self._active and self._active.job_id == job_id:
                 if self._executor:
                     self._executor.cancel()
+                # Executor will persist/publish, but log desired status line(s)
+                try:
+                    # ensure persisted state is published
+                    self._publish_state(self._active)
+                except Exception:
+                    logger.exception("[JobManager] Failed to publish state after cancel.")
                 logger.info(f"[JobManager] Active job cancelled: {job_id}")
+                logger.info("job status cancelled")
                 return True
 
             # Queued job
