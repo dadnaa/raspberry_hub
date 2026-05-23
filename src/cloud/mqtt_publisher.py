@@ -80,6 +80,13 @@ class MQTTPublisher:
         logger.debug(f"[Publisher] job-state: {msg.status} ({msg.progress:.1f}%)")
 
     def command_response(self, msg: CommandResponseMessage) -> None:
+        if msg.status not in ("SUCCESS", "ERROR"):
+            logger.debug(
+                "[Publisher] command-state skipped: %s -> %s",
+                msg.commandName,
+                msg.status,
+            )
+            return
         msg.timestamp = _utc_now()
         payload = msg.to_json()
         self._client.publish(self._topics.command_state, payload)
