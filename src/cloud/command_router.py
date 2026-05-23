@@ -139,6 +139,11 @@ class CommandRouter:
             if g_upper.startswith("M25"):
                 ok = False
                 try:
+                    if hasattr(self._printer_gateway, "track_pending_command"):
+                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
+                except Exception:
+                    logger.exception("[Router] Failed to track pending command on gateway")
+                try:
                     if hasattr(self._printer_gateway, "pause"):
                         ok = self._printer_gateway.pause()
                 except Exception as exc:
@@ -173,6 +178,11 @@ class CommandRouter:
 
             elif g_upper.startswith("M24"):
                 ok = False
+                try:
+                    if hasattr(self._printer_gateway, "track_pending_command"):
+                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
+                except Exception:
+                    logger.exception("[Router] Failed to track pending command on gateway")
                 try:
                     if hasattr(self._printer_gateway, "resume"):
                         ok = self._printer_gateway.resume()
@@ -215,6 +225,11 @@ class CommandRouter:
             ):
                 ok = False
                 try:
+                    if hasattr(self._printer_gateway, "track_pending_command"):
+                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
+                except Exception:
+                    logger.exception("[Router] Failed to track pending command on gateway")
+                try:
                     if hasattr(self._printer_gateway, "cancel"):
                         ok = self._printer_gateway.cancel()
                 except Exception as exc:
@@ -247,14 +262,13 @@ class CommandRouter:
                     logger.warning("[Router] FAILED: %s - gateway cancel failed", command_name)
 
             else:
-                result = self._printer_gateway.send(gcode)
-
-                # Track pending command so gateway event scanner can correlate
                 try:
                     if hasattr(self._printer_gateway, "track_pending_command"):
                         self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
                 except Exception:
                     logger.exception("[Router] Failed to track pending command on gateway")
+
+                result = self._printer_gateway.send(gcode)
                 _start_terminal_waiter(result)
 
         except Exception as exc:
