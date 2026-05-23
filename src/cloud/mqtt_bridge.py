@@ -2,7 +2,7 @@
 mqtt_bridge.py — Sprint 5 Updated MQTT Bridge
 
 Extends Sprint 4 bridge with:
-  - Job control dispatch: start-job, pause-job, resume-job, stop-job
+    - Job control dispatch: start-job, pause-job, resume-job, cancel-job
   - JobManager integration
   - Startup recovery via JobManager.recover()
 """
@@ -26,7 +26,7 @@ from src.core.models import (
     StartJobMessage,
     PauseJobMessage,
     ResumeJobMessage,
-    StopJobMessage,
+    CancelJobMessage,
 )
 from src.telemetry.printer_state import PrinterStatus
 
@@ -133,8 +133,8 @@ class MQTTBridge:
         elif topic == self._topics.resume_job:
             self._handle_resume_job(payload)
 
-        elif topic == self._topics.stop_job:
-            self._handle_stop_job(payload)
+        elif topic == self._topics.cancel_job:
+            self._handle_cancel_job(payload)
 
         else:
             logger.warning(f"[Bridge] Unknown topic (ignored): {topic!r}")
@@ -187,13 +187,13 @@ class MQTTBridge:
         ok = self._jobs.resume(msg.jobId)
         logger.info(f"[Bridge] resume({msg.jobId}) -> {'ok' if ok else 'not found'}")
 
-    def _handle_stop_job(self, payload: str) -> None:
+    def _handle_cancel_job(self, payload: str) -> None:
         try:
-            msg = StopJobMessage.from_json(payload)
+            msg = CancelJobMessage.from_json(payload)
         except Exception as exc:
-            logger.warning(f"[Bridge] Invalid stop-job: {exc}")
+            logger.warning(f"[Bridge] Invalid cancel-job: {exc}")
             return
-        if not self._is_for_this_printer(msg, "stop-job"):
+        if not self._is_for_this_printer(msg, "cancel-job"):
             return
         ok = self._jobs.cancel(msg.jobId)
         logger.info(f"[Bridge] cancel({msg.jobId}) -> {'ok' if ok else 'not found'}")

@@ -3,8 +3,8 @@ core/models.py — Sprint 5: Updated shared dataclasses.
 
 Adds:
   - JobStatus extended with LOADING
-  - New MQTT downstream topics: pause-job, resume-job, stop-job
-  - PauseJobMessage, ResumeJobMessage, StopJobMessage
+    - New MQTT downstream topics: pause-job, resume-job, cancel-job
+    - PauseJobMessage, ResumeJobMessage, CancelJobMessage
   - JobStateMessage gets to_json() for consistency
 """
 
@@ -164,8 +164,8 @@ class ResumeJobMessage:
         return ResumeJobMessage(**json.loads(raw))
 
 @dataclass
-class StopJobMessage:
-    """Mapped to MQTT: printers/{id}/stop-job"""
+class CancelJobMessage:
+    """Mapped to MQTT: printers/{id}/cancel-job"""
     printerId: str
     jobId:     str
     reason:    Optional[str] = None
@@ -174,8 +174,8 @@ class StopJobMessage:
         return json.dumps({k: v for k, v in asdict(self).items() if v is not None})
 
     @staticmethod
-    def from_json(raw: str) -> "StopJobMessage":
-        return StopJobMessage(**json.loads(raw))
+    def from_json(raw: str) -> "CancelJobMessage":
+        return CancelJobMessage(**json.loads(raw))
 
 # ── AI / failure detection models (unchanged) ─────────────────────────
 
