@@ -178,7 +178,7 @@ class CommandRouter:
                 or g_upper.startswith("M0")
                 or g_upper.startswith("M18")
                 or g_upper.startswith("M410")
-                or command_name.strip().lower() in ("cancel", "stop", "stop-job")
+                or command_name.strip().lower() in ("cancel", "stop", "cancel-job")
             ):
                 ok = False
                 try:
