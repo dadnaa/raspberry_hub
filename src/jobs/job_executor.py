@@ -172,6 +172,9 @@ class JobExecutor:
             try:
                 # Poll OctoPrint job state for progress/completion
                 while True:
+                    if self._pause_event.is_set():
+                        self._do_pause()
+
                     if self._fail_event.is_set():
                         self._fail_job()
                         return
