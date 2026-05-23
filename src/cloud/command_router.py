@@ -79,32 +79,12 @@ class CommandRouter:
         command_name = cmd.commandName
         gcode = cmd.gcode
 
-        def _track_terminal_response(timeout_sec: float = 5.0) -> None:
+        def _track_terminal_response() -> None:
             self._pending_results[cmd.commandLogId] = {
                 "printer_id": printer_id,
                 "command_name": command_name,
                 "gcode": gcode,
             }
-
-            def _timeout() -> None:
-                if timeout_sec <= 0:
-                    return
-                time.sleep(timeout_sec)
-                info = self._pending_results.pop(cmd.commandLogId, None)
-                if not info:
-                    return
-                self._pub.command_response(CommandResponseMessage(
-                    printerId=info.get("printer_id"),
-                    commandName=info.get("command_name"),
-                    gcode=info.get("gcode"),
-                    status="TIMEOUT",
-                    commandLogId=cmd.commandLogId,
-                    response="timeout",
-                    reason="No terminal response",
-                ))
-                logger.warning("[Router] TIMEOUT: %s", cmd.commandLogId)
-
-            threading.Thread(target=_timeout, daemon=True).start()
 
         self._pub.command_response(CommandResponseMessage(
             printerId=printer_id,
