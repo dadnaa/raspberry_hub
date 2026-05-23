@@ -63,6 +63,7 @@ class MessageValidator:
             printerId=data["printerId"],
             commandName=data["commandName"],
             gcode=data["gcode"],
+            commandLogId=data["commandLogId"],
             reason=data.get("reason"),
         )
 

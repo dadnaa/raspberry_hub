@@ -50,6 +50,7 @@ class CommandMessage:
     printerId:   str
     commandName: str
     gcode:       str
+    commandLogId: str
     reason:      Optional[str] = None
 
     def to_json(self) -> str:
@@ -122,7 +123,9 @@ class CommandResponseMessage:
     commandName: str
     gcode:       str
     status:      CommandStateStatus
+    commandLogId: str
     reason:      Optional[str] = None
+    response:    Optional[str] = None
     timestamp:   Optional[str] = None
 
     def to_json(self) -> str:

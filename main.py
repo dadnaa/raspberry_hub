@@ -25,6 +25,7 @@ import signal
 import threading
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -65,6 +66,8 @@ def main():
     logger.info("=" * 60)
     logger.info("  Reactive Edge Hub — Full Stack (Sprints 1-6)")
     logger.info("=" * 60)
+    # Load environment from .env in project root if present
+    load_dotenv()
 
     camera_url = os.environ.get(VISION_CAMERA_URL_ENV, VISION_DEFAULT_CAMERA_URL)
     printer_id = os.environ.get(MQTT_PRINTER_ID_ENV, MQTT_DEFAULT_PRINTER_ID)

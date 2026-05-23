@@ -100,6 +100,7 @@ class CommandRouter:
             commandName=command_name,
             gcode=gcode,
             status="QUEUED",
+            commandLogId=cmd.commandLogId,
         ))
 
         # Stage 2: EXECUTING
@@ -108,6 +109,7 @@ class CommandRouter:
             commandName=command_name,
             gcode=gcode,
             status="EXECUTING",
+            commandLogId=cmd.commandLogId,
         ))
 
         # Stage 3: Send through CommandEngine and wait for result
@@ -115,11 +117,14 @@ class CommandRouter:
             result = self._engine.send(gcode)
 
             if result.succeeded:
+                response_line = result.responses[-1] if result.responses else None
                 self._pub.command_response(CommandResponseMessage(
                     printerId=printer_id,
                     commandName=command_name,
                     gcode=gcode,
                     status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
+                        response=response_line,
                 ))
                 logger.info(f"[Router] SUCCESS: {command_name} in {result.elapsed_ms:.1f}ms")
             else:
@@ -130,6 +135,8 @@ class CommandRouter:
                     gcode=gcode,
                     status="ERROR",
                     reason=reason,
+                        commandLogId=cmd.commandLogId,
+                        response=(result.responses[-1] if result.responses else None),
                 ))
                 logger.warning(f"[Router] FAILED: {command_name} — {reason}")
 
@@ -141,5 +148,7 @@ class CommandRouter:
                 gcode=gcode,
                 status="ERROR",
                 reason=reason,
+                commandLogId=cmd.commandLogId,
+                response=(None),
             ))
             logger.exception(f"[Router] Exception executing {command_name}: {exc}")
