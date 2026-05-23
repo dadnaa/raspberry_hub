@@ -52,6 +52,11 @@ class OctoPrintClient:
         # OctoPrint expects an array of commands under the `commands` key.
         self._request("POST", "/api/printer/command", {"commands": [command]})
 
+    def get_terminal(self, limit: int = 10) -> dict[str, Any]:
+        # OctoPrint terminal endpoint returns recent terminal lines.
+        # Use a small limit to keep payloads light.
+        return self._request("GET", f"/api/printer/terminal?limit={int(limit)}")
+
     def pause_job(self) -> None:
         resp = self._request("POST", "/api/job", {"command": "pause", "action": "pause"})
         logger.debug("[OctoPrintClient] pause_job response: %r", resp)

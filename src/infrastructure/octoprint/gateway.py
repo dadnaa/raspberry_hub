@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -162,12 +163,15 @@ class OctoPrintGateway:
         command_id = str(uuid.uuid4())[:8]
         try:
             self._client.send_gcode(gcode)
+            terminal_resp = self._read_terminal_response()
+            if terminal_resp:
+                self._last_command_response = terminal_resp
             elapsed = (datetime.utcnow() - started).total_seconds() * 1000
             return GatewayCommandResult(
                 command_id=command_id,
                 gcode=gcode,
                 status=GatewayCommandStatus.OK,
-                responses=("accepted by OctoPrint",),
+                responses=(terminal_resp or "accepted by OctoPrint",),
                 elapsed_ms=elapsed,
             )
         except Exception as exc:
@@ -271,6 +275,31 @@ class OctoPrintGateway:
         except Exception:
             logger.exception("[OctoPrintGateway] Job control failed: %s", name)
             return False
+
+    def _read_terminal_response(self) -> Optional[str]:
+        """Fetch latest terminal line from OctoPrint for command-state response."""
+        try:
+            payload = self._client.get_terminal(limit=5)
+        except Exception:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        # Common keys from OctoPrint terminal endpoint or plugins.
+        for key in ("terminal", "logs", "lines", "history", "messages"):
+            value = payload.get(key)
+            if isinstance(value, list) and value:
+                last = value[-1]
+                if isinstance(last, str):
+                    return last
+                if isinstance(last, dict):
+                    # Try to find a text field.
+                    for text_key in ("line", "message", "text"):
+                        text_val = last.get(text_key)
+                        if isinstance(text_val, str):
+                            return text_val
+        return None
 
     def _poll_loop(self) -> None:
         while not self._stop_event.is_set():
