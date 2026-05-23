@@ -437,7 +437,21 @@ def handle_command(ser, cmd: str):
         send(ser, "ok\n")
 
     else:
-        send(ser, "ok\n")
+        # Occasionally simulate a printer-side error for testing detection
+        # Randomly emit an "Unknown command" or "Error" line before the ok.
+        try:
+            if random.random() < 0.15:
+                # Choose an error style similar to Marlin/OctoPrint
+                if random.random() < 0.6:
+                    send(ser, f"echo:Unknown command: \"{cmd}\"\n")
+                else:
+                    send(ser, f"Error: Unknown command {cmd}\n")
+                # still acknowledge with ok to mimic some firmwares
+                send(ser, "ok\n")
+            else:
+                send(ser, "ok\n")
+        except Exception:
+            send(ser, "ok\n")
 
 
 # -----------------------------------------------------------------------------
