@@ -10,6 +10,13 @@ import os
 import signal
 import sys
 import threading
+try:
+    # Prefer to load .env automatically during local development if python-dotenv is installed
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    # If python-dotenv isn't installed, continue silently — env must be provided by the runtime.
+    pass
 
 sys.path.insert(0, os.path.dirname(__file__))
 
