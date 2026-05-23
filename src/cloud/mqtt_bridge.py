@@ -197,6 +197,15 @@ class MQTTBridge:
             return
         ok = self._jobs.cancel(msg.jobId)
         logger.info(f"[Bridge] cancel({msg.jobId}) -> {'ok' if ok else 'not found'}")
+        # If cancel succeeded and there is no active or queued job, ensure
+        # printer state is reported as IDLE (not PRINTING/PAUSED).
+        try:
+            if ok and not self._jobs.active_job and self._jobs.queue_length == 0:
+                from src.telemetry.printer_state import PrinterStatus as _PS
+                # Update StateManager; listeners (including this bridge) will publish state.
+                self._state.update(status=_PS.IDLE)
+        except Exception:
+            logger.exception("[Bridge] Could not publish idle state after cancel.")
 
     def _is_for_this_printer(self, msg, message_type: str) -> bool:
         if msg.printerId == self._mqtt.printer_id:
