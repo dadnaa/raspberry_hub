@@ -18,7 +18,7 @@ import json
 PrinterStatus      = Literal["IDLE", "PRINTING", "PAUSED", "OFFLINE"]
 JobStatus          = Literal["QUEUED", "LOADING", "PRINTING", "PAUSED", "COMPLETED", "DONE", "FAILED", "CANCELLED"]
 AIEvent            = Literal["NORMAL", "SPAGHETTI", "LAYER_SHIFT"]
-CommandStateStatus = Literal["QUEUED", "EXECUTING", "SUCCESS", "ERROR"]
+CommandStateStatus = Literal["QUEUED", "EXECUTING", "SUCCESS", "ERROR", "TIMEOUT"]
 
 # ── Existing models ───────────────────────────────────────────────────
 

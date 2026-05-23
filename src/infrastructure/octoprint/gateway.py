@@ -379,9 +379,10 @@ class OctoPrintGateway:
     def _handle_event(self, message: dict) -> None:
         terminal_lines = self._extract_terminal_lines(message)
         if terminal_lines:
-            last_line = terminal_lines[-1]
-            is_error = self._is_error_line(last_line)
-            self._notify_pending_command(last_line, is_error)
+            for line in reversed(terminal_lines):
+                if self._is_ok_line(line) or self._is_error_line(line):
+                    self._notify_pending_command(line, self._is_error_line(line))
+                    break
         current = message.get("current")
         if isinstance(current, dict):
             self._apply_current_payload(current)
@@ -397,6 +398,10 @@ class OctoPrintGateway:
         lowered = text.lower()
         error_indicators = ("unknown command", "unknown gcode", "error", "invalid", "not supported")
         return any(ind in lowered for ind in error_indicators)
+
+    def _is_ok_line(self, text: str) -> bool:
+        lowered = text.lower()
+        return "ok" in lowered
 
     def _apply_current_payload(self, current: dict) -> None:
         updates = {}
