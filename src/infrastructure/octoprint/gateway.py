@@ -103,6 +103,8 @@ class OctoPrintGateway:
         self._pending_commands: list[tuple[str, float, str]] = []
         # Command result listeners: callbacks taking (commandLogId, response_text, is_error)
         self._command_listeners: list[callable] = []
+        # Recent terminal responses (ts, line, is_error)
+        self._recent_terminal: list[tuple[float, str, bool]] = []
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -381,7 +383,9 @@ class OctoPrintGateway:
         if terminal_lines:
             for line in reversed(terminal_lines):
                 if self._is_ok_line(line) or self._is_error_line(line):
-                    self._notify_pending_command(line, self._is_error_line(line))
+                    is_error = self._is_error_line(line)
+                    self._record_terminal_response(line, is_error)
+                    self._notify_pending_command(line, is_error)
                     break
         current = message.get("current")
         if isinstance(current, dict):
@@ -402,6 +406,13 @@ class OctoPrintGateway:
     def _is_ok_line(self, text: str) -> bool:
         lowered = text.lower()
         return "ok" in lowered
+
+    def _record_terminal_response(self, text: str, is_error: bool) -> None:
+        now = time.time()
+        self._recent_terminal.append((now, text, is_error))
+        # Keep only a small, recent window to avoid unbounded growth
+        cutoff = now - 5.0
+        self._recent_terminal = [t for t in self._recent_terminal if t[0] >= cutoff]
 
     def _apply_current_payload(self, current: dict) -> None:
         updates = {}
@@ -436,6 +447,11 @@ class OctoPrintGateway:
     def track_pending_command(self, command_log_id: str, gcode: str) -> None:
         # record with current monotonic timestamp
         self._pending_commands.append((command_log_id, time.time(), gcode))
+        # If a terminal response already arrived, resolve immediately.
+        if self._recent_terminal:
+            ts, line, is_error = self._recent_terminal[-1]
+            if time.time() - ts <= 5.0:
+                self._notify_pending_command(line, is_error)
 
     def _scan_for_printer_texts(self, message: dict) -> None:
         """Search message dict for textual printer responses and notify listeners.
