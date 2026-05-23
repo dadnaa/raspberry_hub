@@ -122,12 +122,15 @@ class CommandRouter:
                                 self._job_manager.pause(active.job_id)
                     except Exception:
                         logger.exception("[Router] Failed to pause active job in JobManager.")
-                    try:
-                        if hasattr(self._printer_gateway, "track_pending_command"):
-                            self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
-                    except Exception:
-                        logger.exception("[Router] Failed to track pending command on gateway")
-                    _track_terminal_response()
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
+                    ))
+                    logger.info("[Router] SUCCESS: %s", command_name)
                 else:
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
@@ -157,12 +160,15 @@ class CommandRouter:
                                 self._job_manager.resume(active.job_id)
                     except Exception:
                         logger.exception("[Router] Failed to resume active job in JobManager.")
-                    try:
-                        if hasattr(self._printer_gateway, "track_pending_command"):
-                            self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
-                    except Exception:
-                        logger.exception("[Router] Failed to track pending command on gateway")
-                    _track_terminal_response()
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
+                    ))
+                    logger.info("[Router] SUCCESS: %s", command_name)
                 else:
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
@@ -197,12 +203,15 @@ class CommandRouter:
                                 self._job_manager.cancel(active.job_id)
                     except Exception:
                         logger.exception("[Router] Failed to cancel active job in JobManager.")
-                    try:
-                        if hasattr(self._printer_gateway, "track_pending_command"):
-                            self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
-                    except Exception:
-                        logger.exception("[Router] Failed to track pending command on gateway")
-                    _track_terminal_response()
+                    self._pub.command_response(CommandResponseMessage(
+                        printerId=printer_id,
+                        commandName=command_name,
+                        gcode=gcode,
+                        status="SUCCESS",
+                        commandLogId=cmd.commandLogId,
+                        response=getattr(self._printer_gateway, "_last_command_response", None),
+                    ))
+                    logger.info("[Router] SUCCESS: %s", command_name)
                 else:
                     self._pub.command_response(CommandResponseMessage(
                         printerId=printer_id,
@@ -216,13 +225,22 @@ class CommandRouter:
                     logger.warning("[Router] FAILED: %s - gateway cancel failed", command_name)
 
             else:
-                result = self._printer_gateway.send(gcode)
-                try:
-                    if hasattr(self._printer_gateway, "track_pending_command"):
-                        self._printer_gateway.track_pending_command(cmd.commandLogId, gcode)
-                except Exception:
-                    logger.exception("[Router] Failed to track pending command on gateway")
-                _track_terminal_response()
+                result = self._printer_gateway.send_gcode_and_wait_response(gcode)
+                status = "SUCCESS" if result.succeeded else "ERROR"
+                response_text = result.responses[-1] if result.responses else None
+                self._pub.command_response(CommandResponseMessage(
+                    printerId=printer_id,
+                    commandName=command_name,
+                    gcode=gcode,
+                    status=status,
+                    commandLogId=cmd.commandLogId,
+                    response=response_text,
+                    reason=result.error_message if result.failed else None,
+                ))
+                if result.failed:
+                    logger.warning("[Router] FAILED: %s - %s", command_name, result.error_message)
+                else:
+                    logger.info("[Router] SUCCESS: %s", command_name)
 
         except Exception as exc:
             reason = str(exc)

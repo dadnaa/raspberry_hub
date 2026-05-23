@@ -71,6 +71,12 @@ class IPrinterGateway(Protocol):
     def stop(self) -> None: ...
     def send(self, gcode: str) -> GatewayCommandResult: ...
     def send_gcode(self, gcode: str) -> GatewayCommandResult: ...
+    def send_gcode_and_wait_response(
+        self,
+        gcode: str,
+        timeout_sec: float = 4.0,
+        poll_interval: float = 0.25,
+    ) -> GatewayCommandResult: ...
     def pause(self) -> bool: ...
     def resume(self) -> bool: ...
     def cancel(self) -> bool: ...
@@ -183,6 +189,101 @@ class OctoPrintGateway:
                 error_message=str(exc),
                 elapsed_ms=elapsed,
             )
+
+    def send_gcode_and_wait_response(
+        self,
+        gcode: str,
+        timeout_sec: float = 4.0,
+        poll_interval: float = 0.25,
+    ) -> GatewayCommandResult:
+        """Send gcode, then poll the terminal until we see an ok/error response."""
+        started = datetime.utcnow()
+        command_id = str(uuid.uuid4())[:8]
+
+        # Snapshot terminal lines before sending so we only look at new lines.
+        try:
+            before = self._client.get_terminal(limit=20)
+            before_lines = {
+                line
+                for line in self._extract_terminal_lines(before)
+                if line
+            }
+        except Exception:
+            before_lines = set()
+
+        try:
+            self._client.send_gcode(gcode)
+        except Exception as exc:
+            elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+            return GatewayCommandResult(
+                command_id=command_id,
+                gcode=gcode,
+                status=GatewayCommandStatus.FAILED,
+                error_message=str(exc),
+                elapsed_ms=elapsed,
+            )
+
+        deadline = time.time() + timeout_sec
+        found_echo = False
+        response_lines: list[str] = []
+        gcode_lower = (gcode or "").lower().rstrip()
+
+        while time.time() < deadline:
+            time.sleep(poll_interval)
+            try:
+                after = self._client.get_terminal(limit=30)
+                new_lines = [
+                    line
+                    for line in self._extract_terminal_lines(after)
+                    if line and line not in before_lines
+                ]
+            except Exception:
+                continue
+
+            for line in new_lines:
+                line_lower = line.lower().strip()
+                if gcode_lower and not found_echo and gcode_lower in line_lower:
+                    found_echo = True
+                    continue
+                if found_echo:
+                    response_lines.append(line)
+                    is_err = self._is_error_line(line)
+                    elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+                    status = GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK
+                    return GatewayCommandResult(
+                        command_id=command_id,
+                        gcode=gcode,
+                        status=status,
+                        responses=tuple(response_lines),
+                        error_message=line if is_err else None,
+                        elapsed_ms=elapsed,
+                    )
+
+            for line in new_lines:
+                if self._is_ok_line(line) or self._is_error_line(line):
+                    is_err = self._is_error_line(line)
+                    elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+                    return GatewayCommandResult(
+                        command_id=command_id,
+                        gcode=gcode,
+                        status=GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK,
+                        responses=(line,),
+                        error_message=line if is_err else None,
+                        elapsed_ms=elapsed,
+                    )
+
+        elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+        logger.warning(
+            "[OctoPrintGateway] send_gcode_and_wait_response timed out for %r",
+            gcode,
+        )
+        return GatewayCommandResult(
+            command_id=command_id,
+            gcode=gcode,
+            status=GatewayCommandStatus.OK,
+            responses=("timeout: no terminal confirmation",),
+            elapsed_ms=elapsed,
+        )
 
     def pause(self) -> bool:
         # Ask OctoPrint to pause via REST, then verify via /api/job that the
@@ -585,6 +686,14 @@ class MockGateway:
             responses=("mock ok",),
             elapsed_ms=0.0,
         )
+
+    def send_gcode_and_wait_response(
+        self,
+        gcode: str,
+        timeout_sec: float = 4.0,
+        poll_interval: float = 0.25,
+    ) -> GatewayCommandResult:
+        return self.send_gcode(gcode)
 
     def pause(self) -> bool:
         self.paused = True
