@@ -66,7 +66,7 @@ The internal completed state is `COMPLETED`; MQTT job-state publishes it as `DON
 | `printers/{id}/start-job` | `submit()` | Load G-code and start or queue the job. |
 | `printers/{id}/pause-job` | `pause()` | Pause the active job and send `M25`. |
 | `printers/{id}/resume-job` | `resume()` | Resume the active job and send `M24`. |
-| `printers/{id}/stop-job` | `cancel()` | Cancel active or queued job. Active cancel sends safe stop commands. |
+| `printers/{id}/cancel-job` | `cancel()` | Cancel active or queued job. Active cancel sends safe stop commands. |
 
 `JobManager.fail(job_id, reason)` is also available internally and is used by the vision system.
 

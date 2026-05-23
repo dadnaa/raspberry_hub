@@ -55,6 +55,7 @@ class MQTTBridge:
         state_manager,
         printer_config: PrinterConfig,
         job_manager:    Optional[JobManager] = None,
+        telemetry_engine: Optional[object] = None,
     ) -> None:
         self._engine  = command_engine
         self._state   = state_manager
@@ -77,6 +78,9 @@ class MQTTBridge:
             publish_state=self._pub.job_state,
             printer_id=self._mqtt.printer_id,
         )
+        # Optional TelemetryEngine instance used for suppressing immediate
+        # telemetry-driven PRINTING transitions after a cancel.
+        self._telemetry = telemetry_engine
 
         self._stop_event = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
@@ -204,6 +208,13 @@ class MQTTBridge:
                 from src.telemetry.printer_state import PrinterStatus as _PS
                 # Update StateManager; listeners (including this bridge) will publish state.
                 self._state.update(status=_PS.IDLE)
+                # Also ask telemetry engine to suppress immediate PRINTING
+                # transitions for a short window while the safe-stop completes.
+                try:
+                    if self._telemetry:
+                        self._telemetry.suppress_printing(2.0)
+                except Exception:
+                    logger.exception("[Bridge] telemetry suppress failed")
         except Exception:
             logger.exception("[Bridge] Could not publish idle state after cancel.")
 
