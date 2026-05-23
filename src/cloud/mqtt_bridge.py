@@ -179,6 +179,16 @@ class MQTTBridge:
             return
         ok = self._jobs.pause(msg.jobId)
         logger.info(f"[Bridge] pause({msg.jobId}) -> {'ok' if ok else 'not found'}")
+        # If pause succeeded, proactively mark printer PAUSED so upstream
+        # consumers see PAUSED (avoid accidental OFFLINE mapping).
+        try:
+            if ok:
+                from src.telemetry.printer_state import PrinterStatus as _PS
+                self._state.update(status=_PS.PAUSED)
+                # Force immediate publish of the new state
+                self._publish_printer_state(self._state.get_snapshot())
+        except Exception:
+            logger.exception("[Bridge] Could not publish PAUSED state after pause.")
 
     def _handle_resume_job(self, payload: str) -> None:
         try:
@@ -208,6 +218,11 @@ class MQTTBridge:
                 from src.telemetry.printer_state import PrinterStatus as _PS
                 # Update StateManager; listeners (including this bridge) will publish state.
                 self._state.update(status=_PS.IDLE)
+                # Force immediate publish to ensure IDLE is sent (not OFFLINE)
+                try:
+                    self._publish_printer_state(self._state.get_snapshot())
+                except Exception:
+                    logger.exception("[Bridge] publish idle failed")
                 # Also ask telemetry engine to suppress immediate PRINTING
                 # transitions for a short window while the safe-stop completes.
                 try:
