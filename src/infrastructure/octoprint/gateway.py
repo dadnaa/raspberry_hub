@@ -103,6 +103,11 @@ class OctoPrintGateway:
         self._pending_commands: list[tuple[str, float, str]] = []
         # Command result listeners: callbacks taking (commandLogId, response_text, is_error)
         self._command_listeners: list[callable] = []
+        # Websocket terminal response tracking
+        self._terminal_event = threading.Event()
+        self._terminal_lock = threading.Lock()
+        self._last_terminal_line: Optional[str] = None
+        self._last_terminal_ts: float = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -163,7 +168,7 @@ class OctoPrintGateway:
         command_id = str(uuid.uuid4())[:8]
         try:
             self._client.send_gcode(gcode)
-            terminal_resp = self._read_terminal_response()
+            terminal_resp = self._await_terminal_response(timeout_sec=1.0)
             if terminal_resp:
                 self._last_command_response = terminal_resp
             elapsed = (datetime.utcnow() - started).total_seconds() * 1000
@@ -276,30 +281,58 @@ class OctoPrintGateway:
             logger.exception("[OctoPrintGateway] Job control failed: %s", name)
             return False
 
-    def _read_terminal_response(self) -> Optional[str]:
-        """Fetch latest terminal line from OctoPrint for command-state response."""
-        try:
-            payload = self._client.get_terminal(limit=5)
-        except Exception:
-            return None
-
-        if not isinstance(payload, dict):
-            return None
-
-        # Common keys from OctoPrint terminal endpoint or plugins.
-        for key in ("terminal", "logs", "lines", "history", "messages"):
-            value = payload.get(key)
-            if isinstance(value, list) and value:
-                last = value[-1]
-                if isinstance(last, str):
-                    return last
-                if isinstance(last, dict):
-                    # Try to find a text field.
-                    for text_key in ("line", "message", "text"):
-                        text_val = last.get(text_key)
-                        if isinstance(text_val, str):
-                            return text_val
+    def _await_terminal_response(self, timeout_sec: float = 1.0) -> Optional[str]:
+        """Wait for a fresh terminal line from the websocket stream."""
+        start_ts = time.monotonic()
+        deadline = start_ts + max(0.0, timeout_sec)
+        while True:
+            with self._terminal_lock:
+                if self._last_terminal_ts > start_ts and self._last_terminal_line:
+                    return self._last_terminal_line
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._terminal_event.wait(remaining)
+            self._terminal_event.clear()
         return None
+
+    def _record_terminal_line(self, line: str) -> None:
+        if not line:
+            return
+        with self._terminal_lock:
+            self._last_terminal_line = line
+            self._last_terminal_ts = time.monotonic()
+            self._terminal_event.set()
+
+    def _extract_terminal_lines(self, message: dict) -> list[str]:
+        lines: list[str] = []
+
+        def add_line(item) -> None:
+            if isinstance(item, str):
+                lines.append(item)
+                return
+            if isinstance(item, dict):
+                for key in ("line", "message", "text"):
+                    text_val = item.get(key)
+                    if isinstance(text_val, str):
+                        lines.append(text_val)
+                        return
+
+        def walk(obj) -> None:
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    if key in ("terminal", "logs", "lines", "history", "messages"):
+                        if isinstance(value, list):
+                            for entry in value:
+                                add_line(entry)
+                    else:
+                        walk(value)
+            elif isinstance(obj, list):
+                for entry in obj:
+                    walk(entry)
+
+        walk(message)
+        return lines
 
     def _poll_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -359,6 +392,9 @@ class OctoPrintGateway:
         self._state.update(**updates)
 
     def _handle_event(self, message: dict) -> None:
+        terminal_lines = self._extract_terminal_lines(message)
+        if terminal_lines:
+            self._record_terminal_line(terminal_lines[-1])
         current = message.get("current")
         if isinstance(current, dict):
             self._apply_current_payload(current)
