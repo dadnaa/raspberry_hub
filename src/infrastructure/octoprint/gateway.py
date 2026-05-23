@@ -103,11 +103,6 @@ class OctoPrintGateway:
         self._pending_commands: list[tuple[str, float, str]] = []
         # Command result listeners: callbacks taking (commandLogId, response_text, is_error)
         self._command_listeners: list[callable] = []
-        # Websocket terminal response tracking
-        self._terminal_event = threading.Event()
-        self._terminal_lock = threading.Lock()
-        self._last_terminal_line: Optional[str] = None
-        self._last_terminal_ts: float = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -168,15 +163,12 @@ class OctoPrintGateway:
         command_id = str(uuid.uuid4())[:8]
         try:
             self._client.send_gcode(gcode)
-            terminal_resp = self._await_terminal_response(timeout_sec=1.0)
-            if terminal_resp:
-                self._last_command_response = terminal_resp
             elapsed = (datetime.utcnow() - started).total_seconds() * 1000
             return GatewayCommandResult(
                 command_id=command_id,
                 gcode=gcode,
                 status=GatewayCommandStatus.OK,
-                responses=(terminal_resp or "accepted by OctoPrint",),
+                responses=(),
                 elapsed_ms=elapsed,
             )
         except Exception as exc:
@@ -281,28 +273,21 @@ class OctoPrintGateway:
             logger.exception("[OctoPrintGateway] Job control failed: %s", name)
             return False
 
-    def _await_terminal_response(self, timeout_sec: float = 1.0) -> Optional[str]:
-        """Wait for a fresh terminal line from the websocket stream."""
-        start_ts = time.monotonic()
-        deadline = start_ts + max(0.0, timeout_sec)
-        while True:
-            with self._terminal_lock:
-                if self._last_terminal_ts > start_ts and self._last_terminal_line:
-                    return self._last_terminal_line
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            self._terminal_event.wait(remaining)
-            self._terminal_event.clear()
-        return None
-
-    def _record_terminal_line(self, line: str) -> None:
-        if not line:
+    def _notify_pending_command(self, text: str, is_error: bool) -> None:
+        if not text:
             return
-        with self._terminal_lock:
-            self._last_terminal_line = line
-            self._last_terminal_ts = time.monotonic()
-            self._terminal_event.set()
+        now = time.time()
+        window = 5.0
+        candidates = [p for p in self._pending_commands if now - p[1] <= window]
+        if not candidates:
+            return
+        cmd_log_id, ts, gcode = candidates[-1]
+        self._pending_commands = [p for p in self._pending_commands if p[0] != cmd_log_id]
+        for cb in list(self._command_listeners):
+            try:
+                cb(cmd_log_id, text, is_error)
+            except Exception:
+                logger.exception("[OctoPrintGateway] command listener raised")
 
     def _extract_terminal_lines(self, message: dict) -> list[str]:
         lines: list[str] = []
@@ -394,7 +379,9 @@ class OctoPrintGateway:
     def _handle_event(self, message: dict) -> None:
         terminal_lines = self._extract_terminal_lines(message)
         if terminal_lines:
-            self._record_terminal_line(terminal_lines[-1])
+            last_line = terminal_lines[-1]
+            is_error = self._is_error_line(last_line)
+            self._notify_pending_command(last_line, is_error)
         current = message.get("current")
         if isinstance(current, dict):
             self._apply_current_payload(current)
@@ -405,6 +392,11 @@ class OctoPrintGateway:
             self._scan_for_printer_texts(message)
         except Exception:
             logger.exception("[OctoPrintGateway] Failed scanning event for printer responses")
+
+    def _is_error_line(self, text: str) -> bool:
+        lowered = text.lower()
+        error_indicators = ("unknown command", "unknown gcode", "error", "invalid", "not supported")
+        return any(ind in lowered for ind in error_indicators)
 
     def _apply_current_payload(self, current: dict) -> None:
         updates = {}
@@ -479,22 +471,7 @@ class OctoPrintGateway:
         if not is_error:
             return
 
-        # correlate to most recent pending command within 5 seconds
-        now = time.time()
-        window = 5.0
-        candidates = [p for p in self._pending_commands if now - p[1] <= window]
-        if not candidates:
-            return
-        # pick latest
-        cmd_log_id, ts, gcode = candidates[-1]
-        # remove it from pending
-        self._pending_commands = [p for p in self._pending_commands if p[0] != cmd_log_id]
-        resp_text = joined
-        for cb in list(self._command_listeners):
-            try:
-                cb(cmd_log_id, resp_text, True)
-            except Exception:
-                logger.exception("[OctoPrintGateway] command listener raised")
+        self._notify_pending_command(joined, True)
 
     # ------------------------------------------------------------------
     # Convenience passthroughs to OctoPrintClient

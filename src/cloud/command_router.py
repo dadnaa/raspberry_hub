@@ -251,7 +251,9 @@ class CommandRouter:
                     else:
                         # No error observed in window — treat as success
                         last_resp = None
-                        if getattr(result, "responses", None):
+                        if info and info.get("resp"):
+                            last_resp = info.get("resp")
+                        elif getattr(result, "responses", None):
                             last_resp = result.responses[-1] if len(result.responses) else None
                         self._pub.command_response(CommandResponseMessage(
                             printerId=printer_id,
