@@ -397,7 +397,17 @@ class OctoPrintGateway:
         if not text_fragments:
             return
 
+        # Emit debug logs so we can inspect raw event payload text fragments
+        try:
+            logger.debug("[OctoPrintGateway] collected text fragments: %r", text_fragments)
+        except Exception:
+            pass
+
         joined = " ".join(text_fragments).lower()
+        try:
+            logger.debug("[OctoPrintGateway] joined event text: %s", joined)
+        except Exception:
+            pass
         # simple error indicators
         error_indicators = ("unknown command", "unknown gcode", "error", "invalid", "not supported")
         is_error = any(ind in joined for ind in error_indicators)
