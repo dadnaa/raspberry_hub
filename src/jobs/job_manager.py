@@ -142,7 +142,10 @@ class JobManager:
             # Active job
             if self._active and self._active.job_id == job_id:
                 if self._executor:
-                    self._executor.cancel()
+                    # If there are queued jobs, preserve pause state so the
+                    # printer remains PAUSED for handoff; otherwise end in IDLE.
+                    preserve = bool(self._queue)
+                    self._executor.cancel(preserve_pause=preserve)
                 logger.info(f"[JobManager] Active job cancelled: {job_id}")
                 return True
 

@@ -52,6 +52,7 @@ class JobExecutor:
         self._cancel_event = threading.Event()
         self._fail_event   = threading.Event()
         self._fail_reason: Optional[str] = None
+        self._preserve_pause: bool = True
         self._thread:      Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -80,7 +81,15 @@ class JobExecutor:
             self._job.mark_printing()
             self._persist_and_publish()
 
-    def cancel(self) -> None:
+    def cancel(self, preserve_pause: bool = True) -> None:
+        """Request job cancellation.
+
+        preserve_pause: if True (default) send an M25 pause as part of the
+        safe-stop sequence so the printer remains in PAUSED state. If False,
+        skip the M25 so the printer ends up IDLE when the job is cancelled
+        (useful when no queued job follows).
+        """
+        self._preserve_pause = preserve_pause
         self._cancel_event.set()
         self._pause_event.clear()
         self._fail_event.clear()
@@ -190,7 +199,11 @@ class JobExecutor:
         self._fire_finished()
 
     def _safe_stop(self) -> None:
-        for cmd in ("M25", "M104 S0", "M140 S0", "M84"):
+        cmds = []
+        if self._preserve_pause:
+            cmds.append("M25")
+        cmds.extend(("M104 S0", "M140 S0", "M84"))
+        for cmd in cmds:
             try: self._engine.send(cmd)
             except Exception: pass
 
