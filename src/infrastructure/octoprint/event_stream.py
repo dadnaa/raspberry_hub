@@ -206,20 +206,11 @@ def _decode_sockjs(raw: str) -> list[dict]:
         return []
 
 
-def _sockjs_frame(payload: dict) -> str:
-    """Return a SockJS-framed string for sending: a["{...}"]
-
-    SockJS message frames are prefixed with a single-letter channel
-    indicator. For typical application frames we use 'a' followed by a
-    JSON array containing the stringified JSON payload.
-    """
-    inner = json.dumps(payload)
-    return "a" + json.dumps([inner])
-
-
 def _sockjs_send(ws, payload: dict) -> None:
+    """Send a SockJS-framed application message: a["{...}"]"""
     try:
-        frame = json.dumps([json.dumps(payload)])
+        inner = json.dumps(payload)
+        frame = "a" + json.dumps([inner])
         ws.send(frame)
     except Exception:
         logger.exception(
