@@ -488,8 +488,7 @@ class OctoPrintGateway:
         if isinstance(current, dict):
             try:
                 logs = current.get("logs") or []
-                if logs:
-                    logger.debug("[GW] WS logs: %r", logs)
+                logger.debug("[GW] current frame - logs count: %d, sample: %r", len(logs), logs[:5])
                 for line in logs:
                     if isinstance(line, str):
                         try:

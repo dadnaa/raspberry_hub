@@ -88,7 +88,7 @@ class OctoPrintEventStream:
 
                 while not self._stop_event.is_set():
                     raw = ws.recv()
-                    logger.debug("[OctoPrintEventStream] Raw frame: %r", (raw[:120] if raw else raw))
+                    logger.debug("[OctoPrintEventStream] Raw frame: %r", raw)
 
                     if raw == "o":
                         if name and session:
@@ -97,6 +97,8 @@ class OctoPrintEventStream:
                                 logger.info("[OctoPrintEventStream] Sent auth for user=%r", name)
                                 _sockjs_send(ws, {"throttle": 0.25})
                                 logger.info("[OctoPrintEventStream] Sent throttle=0.25")
+                                _sockjs_send(ws, {"subscribe": {"logs": True}})
+                                logger.info("[OctoPrintEventStream] Sent subscribe.logs=True")
                             except Exception:
                                 logger.exception("[OctoPrintEventStream] Failed to send auth/throttle.")
                         else:
