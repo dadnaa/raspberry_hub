@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import threading
 import time
+import string
 from typing import Callable, Optional
 import urllib.request
 import urllib.parse
@@ -30,7 +32,6 @@ class OctoPrintEventStream:
         reconnect_sec: float = OCTOPRINT_WEBSOCKET_RECONNECT_SEC,
     ) -> None:
         self._base_url = base_url
-        self._url = _websocket_url(base_url)
         self._api_key = api_key
         self._on_message = on_message
         self._reconnect_sec = reconnect_sec
@@ -65,35 +66,20 @@ class OctoPrintEventStream:
 
     def _run(self) -> None:
         import websocket
-        headers = [f"X-Api-Key: {self._api_key}"]
         while not self._stop_event.is_set():
             ws = None
             try:
-                # Passive login must use POST on OctoPrint 1.5+
-                login_url = urllib.parse.urljoin(
-                    self._base_url,
-                    f"/api/login?passive=true&apikey={urllib.parse.quote(self._api_key)}",
-                )
-                name = None
-                session = None
-                try:
-                    req = urllib.request.Request(login_url, data=b"", method="POST")
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        raw = resp.read()
-                        if raw:
-                            data = json.loads(raw.decode("utf-8"))
-                            name = data.get("name")
-                            session = data.get("session")
-                            logger.info(
-                                "[OctoPrintEventStream] Passive login (POST): name=%r session=%r",
-                                name,
-                                (session[:8] + "...") if session else None,
-                            )
-                except Exception:
-                    logger.exception("[OctoPrintEventStream] Passive login failed.")
+                url = _websocket_url(self._base_url)
+                logger.info("[OctoPrintEventStream] Connecting to %s", url)
 
-                ws = websocket.create_connection(self._url, header=headers, timeout=10)
-                logger.info("[OctoPrintEventStream] Connected: %s", self._url)
+                name, session = _passive_login(self._base_url, self._api_key)
+
+                ws = websocket.create_connection(
+                    url,
+                    header=[f"X-Api-Key: {self._api_key}"],
+                    timeout=10,
+                )
+                logger.info("[OctoPrintEventStream] Connected: %s", url)
                 # Ensure recv() blocks indefinitely rather than timing out.
                 try:
                     ws.settimeout(None)
@@ -137,9 +123,37 @@ class OctoPrintEventStream:
 
 
 def _websocket_url(base_url: str) -> str:
+    server_id = str(random.randint(0, 999)).zfill(3)
+    session_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
     parsed = urlparse(base_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
-    return urlunparse((scheme, parsed.netloc, "/sockjs/websocket", "", "", ""))
+    path = f"/sockjs/{server_id}/{session_id}/websocket"
+    return urlunparse((scheme, parsed.netloc, path, "", "", ""))
+
+
+def _passive_login(base_url: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
+    login_url = urllib.parse.urljoin(
+        base_url,
+        f"/api/login?passive=true&apikey={urllib.parse.quote(api_key)}",
+    )
+    try:
+        req = urllib.request.Request(login_url, data=b"", method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read()
+            if not raw:
+                return None, None
+            data = json.loads(raw.decode("utf-8"))
+            name = data.get("name")
+            session = data.get("session")
+            logger.info(
+                "[OctoPrintEventStream] Passive login (POST): name=%r session=%r",
+                name,
+                (session[:8] + "...") if session else None,
+            )
+            return name, session
+    except Exception:
+        logger.exception("[OctoPrintEventStream] Passive login failed.")
+        return None, None
 
 
 def _decode_sockjs(raw: str) -> list[dict]:
