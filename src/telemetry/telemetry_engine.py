@@ -90,6 +90,7 @@ class TelemetryEngine:
         self._thread:       Optional[threading.Thread] = None
         self._poll_thread:  Optional[threading.Thread] = None
         self._last_line_ts: float = 0.0
+        self._suppress_printing_until: float = 0.0
 
         self._state.register_listener(self._on_state_change)
 
@@ -311,7 +312,9 @@ class TelemetryEngine:
         if prog:
             updates["progress_pct"] = prog.percent
             if prog.percent > 0:
-                updates["status"] = PrinterStatus.PRINTING
+                import time as _time
+                if _time.time() >= self._suppress_printing_until:
+                    updates["status"] = PrinterStatus.PRINTING
 
         if parser.is_sd_done(line):
             updates["progress_pct"] = 100.0
@@ -326,7 +329,9 @@ class TelemetryEngine:
             logger.info("[Telemetry] Printer paused.")
 
         if parser.is_resumed(line):
-            updates["status"] = PrinterStatus.PRINTING
+            import time as _time
+            if _time.time() >= self._suppress_printing_until:
+                updates["status"] = PrinterStatus.PRINTING
             logger.info("[Telemetry] Printer resumed.")
 
         if updates:
@@ -363,3 +368,12 @@ class TelemetryEngine:
             self._on_event(event)
         except Exception:
             logger.exception("[Telemetry] on_event callback raised.")
+
+    def suppress_printing(self, duration_sec: float) -> None:
+        """Temporarily ignore telemetry-driven transitions to PRINTING.
+
+        Used after a cancel to prevent telemetry from immediately marking
+        the printer as PRINTING while the safe-stop sequence completes.
+        """
+        import time as _time
+        self._suppress_printing_until = _time.time() + float(duration_sec)

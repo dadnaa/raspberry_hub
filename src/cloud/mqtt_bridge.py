@@ -215,6 +215,14 @@ class MQTTBridge:
             return
         ok = self._jobs.cancel(msg.jobId)
         logger.info(f"[Bridge] cancel({msg.jobId}) -> {'ok' if ok else 'not found'}")
+        # After a cancel, suppress immediate telemetry-driven PRINTING
+        # transitions so the safe-stop sequence can complete and the
+        # executor-decided IDLE state remains visible.
+        try:
+            if ok and self._telemetry:
+                self._telemetry.suppress_printing(2.0)
+        except Exception:
+            logger.exception("[Bridge] telemetry suppress failed")
 
     def _is_for_this_printer(self, msg, message_type: str) -> bool:
         if msg.printerId == self._mqtt.printer_id:
