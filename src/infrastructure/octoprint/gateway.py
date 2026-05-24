@@ -477,36 +477,6 @@ class OctoPrintGateway:
             except Exception:
                 logger.exception("[OctoPrintGateway] command listener raised")
 
-    def _extract_terminal_lines(self, message: dict) -> list[str]:
-        lines: list[str] = []
-
-        def add_line(item) -> None:
-            if isinstance(item, str):
-                lines.append(item)
-                return
-            if isinstance(item, dict):
-                for key in ("line", "message", "text"):
-                    text_val = item.get(key)
-                    if isinstance(text_val, str):
-                        lines.append(text_val)
-                        return
-
-        def walk(obj) -> None:
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    if key in ("terminal", "logs", "lines", "history", "messages"):
-                        if isinstance(value, list):
-                            for entry in value:
-                                add_line(entry)
-                    else:
-                        walk(value)
-            elif isinstance(obj, list):
-                for entry in obj:
-                    walk(entry)
-
-        walk(message)
-        return lines
-
     def _parse_terminal_lines(self, terminal_response: dict) -> list[str]:
         """Extract ordered lines from whatever structure get_terminal() returns."""
         lines: list[str] = []
@@ -586,21 +556,14 @@ class OctoPrintGateway:
         # No REST terminal fallback: terminal endpoint is not reliable.
 
     def _handle_event(self, message: dict) -> None:
-        # Quick diagnostic: log message shape and small sample of logs (temporary)
-        keys = list(message.keys())
-        if "current" in message:
-            current = message["current"]
-            logs = current.get("logs") or []
-            logger.debug("[GW] WS current: keys=%s logs=%r", list(current.keys()), logs[:3])
-        else:
-            logger.debug("[GW] WS message keys: %s", keys)
+        logger.info("[GW] _handle_event keys=%s", list(message.keys()))
 
         # Primary path: OctoPrint may include logs in the `current` payload.
         current = message.get("current")
         if isinstance(current, dict):
             try:
                 logs = current.get("logs") or []
-                logger.debug("[GW] current frame - logs count: %d, sample: %r", len(logs), logs[:5])
+                logger.info("[GW] current.logs count=%d sample=%r", len(logs), logs[:5])
                 for line in logs:
                     if isinstance(line, str):
                         try:
@@ -611,12 +574,9 @@ class OctoPrintGateway:
                 logger.exception("[OctoPrintGateway] Failed processing current.logs")
             self._apply_current_payload(current)
 
-        # Secondary path: walk the full message for other terminal-like shapes
-        for line in self._extract_terminal_lines(message):
-            try:
-                self._dispatch_recv_line(line)
-            except Exception:
-                logger.exception("[OctoPrintGateway] dispatch_recv_line failed for extracted lines")
+        history = message.get("history")
+        if isinstance(history, dict):
+            self._apply_current_payload(history)
 
     def _is_error_line(self, text: str) -> bool:
         lowered = text.lower()
@@ -737,6 +697,7 @@ class OctoPrintGateway:
         if not isinstance(line, str):
             return
         line = line.strip()
+        logger.info("[GW] _dispatch_recv_line called: %r", line[:80])
         logger.debug("[GW] dispatch candidate: %r listeners=%d", line[:60], len(self._recv_listeners))
         if not line.lower().startswith("recv:"):
             return
