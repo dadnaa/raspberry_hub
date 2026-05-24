@@ -473,6 +473,15 @@ class OctoPrintGateway:
         # No REST terminal fallback: terminal endpoint is not reliable.
 
     def _handle_event(self, message: dict) -> None:
+        # Quick diagnostic: log message shape and small sample of logs (temporary)
+        keys = list(message.keys())
+        if "current" in message:
+            current = message["current"]
+            logs = current.get("logs") or []
+            logger.debug("[GW] WS current: keys=%s logs=%r", list(current.keys()), logs[:3])
+        else:
+            logger.debug("[GW] WS message keys: %s", keys)
+
         # Primary path: OctoPrint may include logs in the `current` payload.
         current = message.get("current")
         if isinstance(current, dict):
@@ -493,13 +502,6 @@ class OctoPrintGateway:
                 self._dispatch_recv_line(line)
             except Exception:
                 logger.exception("[OctoPrintGateway] dispatch_recv_line failed for extracted lines")
-        # Also scan the raw message for textual printer responses that may
-        # indicate command errors (e.g., "Unknown command"). Attempt to
-        # correlate these to recently-sent commands.
-        try:
-            self._scan_for_printer_texts(message)
-        except Exception:
-            logger.exception("[OctoPrintGateway] Failed scanning event for printer responses")
 
     def _is_error_line(self, text: str) -> bool:
         lowered = text.lower()

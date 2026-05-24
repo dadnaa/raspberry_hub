@@ -110,8 +110,12 @@ class OctoPrintEventStream:
                         # SockJS expects an array of stringified messages.
                         msg = json.dumps([json.dumps(auth_obj)])
                         ws.send(msg)
+                        # Request throttle so OctoPrint includes logs/messages in `current`.
+                        throttle_obj = {"throttle": 1}
+                        throttle_msg = json.dumps([json.dumps(throttle_obj)])
+                        ws.send(throttle_msg)
                     except Exception:
-                        logger.exception("[OctoPrintEventStream] Failed to send SockJS auth message.")
+                        logger.exception("[OctoPrintEventStream] Failed to send SockJS auth/throttle message.")
                 while not self._stop_event.is_set():
                     raw = ws.recv()
                     for message in _decode_sockjs(raw):
