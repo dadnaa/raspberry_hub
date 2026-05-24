@@ -66,6 +66,7 @@ class OctoPrintEventStream:
 
     def _run(self) -> None:
         import websocket
+
         while not self._stop_event.is_set():
             ws = None
             try:
@@ -80,30 +81,51 @@ class OctoPrintEventStream:
                     timeout=10,
                 )
                 logger.info("[OctoPrintEventStream] Connected: %s", url)
-                # Ensure recv() blocks indefinitely rather than timing out.
                 try:
                     ws.settimeout(None)
                 except Exception:
                     pass
+
+                authenticated = False
 
                 while not self._stop_event.is_set():
                     raw = ws.recv()
                     logger.debug("[OctoPrintEventStream] Raw frame: %r", raw)
 
                     if raw == "o":
-                        # SockJS open frame — authenticate and subscribe
+                        # SockJS open frame – send authentication
                         if name and session:
                             try:
                                 _sockjs_send(ws, {"auth": f"{name}:{session}"})
                                 logger.info(
-                                    "[OctoPrintEventStream] Sent auth for user=%r", name
+                                    "[OctoPrintEventStream] Sent auth for user=%r",
+                                    name,
                                 )
+                            except Exception:
+                                logger.exception(
+                                    "[OctoPrintEventStream] Failed to send auth."
+                                )
+                        else:
+                            logger.warning(
+                                "[OctoPrintEventStream] No auth credentials."
+                            )
+                        continue
+
+                    if raw in ("h", ""):
+                        # Heartbeat – ignore
+                        continue
+
+                    # Decode SockJS frames
+                    for message in _decode_sockjs(raw):
+                        # If we haven't yet sent throttle/subscribe, check for the
+                        # 'connected' response.
+                        if not authenticated and "connected" in message:
+                            authenticated = True
+                            try:
                                 _sockjs_send(ws, {"throttle": 0.25})
-                                logger.info("[OctoPrintEventStream] Sent throttle=0.25")
-                                # Subscribe to logs + temperatures + current state.
-                                # Logs are essential: they carry the printer terminal
-                                # output ("Recv: ok", "Recv: T:…") that
-                                # send_gcode_and_wait_response listens for.
+                                logger.info(
+                                    "[OctoPrintEventStream] Sent throttle=0.25"
+                                )
                                 _sockjs_send(
                                     ws,
                                     {
@@ -119,20 +141,9 @@ class OctoPrintEventStream:
                                 )
                             except Exception:
                                 logger.exception(
-                                    "[OctoPrintEventStream] Failed to send auth/throttle."
+                                    "[OctoPrintEventStream] Failed to send throttle/subscribe."
                                 )
-                        else:
-                            logger.warning(
-                                "[OctoPrintEventStream] No auth credentials — "
-                                "OctoPrint will not push current payloads"
-                            )
-                        continue
-
-                    # SockJS heartbeat frame — ignore silently
-                    if raw in ("h", ""):
-                        continue
-
-                    for message in _decode_sockjs(raw):
+                        # Always dispatch the message to the callback
                         self._on_message(message)
 
             except Exception:
@@ -145,8 +156,6 @@ class OctoPrintEventStream:
                         ws.close()
                     except Exception:
                         pass
-
-
 def _websocket_url(base_url: str) -> str:
     server_id = str(random.randint(0, 999)).zfill(3)
     session_id = "".join(
