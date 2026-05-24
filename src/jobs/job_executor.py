@@ -43,6 +43,7 @@ class JobExecutor:
         on_finished:     Optional[Callable[[Job], None]] = None,
         state_listener:  Optional[Callable[[Job], None]] = None,
         state_manager:   Optional[object] = None,
+        telemetry_engine: Optional[object] = None,
     ) -> None:
         self._job            = job
         self._engine         = command_engine
@@ -52,6 +53,7 @@ class JobExecutor:
         self._on_finished    = on_finished
         self._state_listener = state_listener
         self._state_manager  = state_manager
+        self._telemetry_engine = telemetry_engine
 
         self._pause_event  = threading.Event()
         self._cancel_event = threading.Event()
@@ -115,6 +117,11 @@ class JobExecutor:
                     self._state_manager.update(status=PrinterStatus.IDLE)
             except Exception:
                 logger.exception("[Executor] Failed to update state_manager on cancel")
+            try:
+                if self._telemetry_engine:
+                    self._telemetry_engine.suppress_printing(2.0)
+            except Exception:
+                logger.exception("[Executor] Failed to suppress telemetry on cancel")
 
     def fail(self, reason: str) -> None:
         self._fail_reason = reason

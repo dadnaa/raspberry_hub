@@ -71,6 +71,8 @@ class MQTTBridge:
             validator=self._val,
             command_engine=command_engine,
         )
+        # Keep a reference to the telemetry engine (may be None).
+        self._telemetry = telemetry_engine
 
         # JobManager — created here if not injected. Prefer to pass the
         # StateManager so executors can update telemetry, but fall back to
@@ -88,12 +90,14 @@ class MQTTBridge:
                     publish_state=self._pub.job_state,
                     printer_id=self._mqtt.printer_id,
                     state_manager=self._state,
+                    telemetry_engine=self._telemetry,
                 )
             except TypeError:
                 self._jobs = JobManager(
                     command_engine=command_engine,
                     publish_state=self._pub.job_state,
                     printer_id=self._mqtt.printer_id,
+                    telemetry_engine=self._telemetry,
                 )
 
         self._stop_event = threading.Event()
