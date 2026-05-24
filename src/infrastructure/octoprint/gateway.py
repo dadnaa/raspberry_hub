@@ -230,7 +230,7 @@ class OctoPrintGateway:
             name, session = _passive_login_sync(self._client.base_url, self._client.api_key)
             if name and session:
                 try:
-                    _sockjs_send(ws, {"auth": f"{name}:{session}"})
+                    ws.send(json.dumps([json.dumps({"auth": f"{name}:{session}"})]))
                 except Exception:
                     logger.exception("[OctoPrintGateway] Failed to send auth on dedicated ws")
 
