@@ -14,6 +14,7 @@ import time
 from typing import Callable, Optional
 import urllib.request
 import urllib.parse
+import urllib.error
 from urllib.parse import urlparse, urlunparse
 
 from config.settings import OCTOPRINT_WEBSOCKET_RECONNECT_SEC
@@ -70,18 +71,38 @@ class OctoPrintEventStream:
             ws = None
             try:
                 # First perform passive login to obtain SockJS session credentials.
-                login_url = urllib.parse.urljoin(self._base_url, f"/api/login?passive=true&apikey={urllib.parse.quote(self._api_key)}")
+                login_url = urllib.parse.urljoin(
+                    self._base_url,
+                    f"/api/login?passive=true&apikey={urllib.parse.quote(self._api_key)}",
+                )
                 name = None
                 session = None
                 try:
-                    with urllib.request.urlopen(login_url, timeout=10) as resp:
+                    req = urllib.request.Request(login_url, method="GET")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
                         raw = resp.read()
                         if raw:
                             data = json.loads(raw.decode("utf-8"))
                             name = data.get("name")
                             session = data.get("session")
+                except urllib.error.HTTPError as exc:
+                    # Some OctoPrint versions reject GET for /api/login. Fall back to
+                    # POST before giving up so we don't log noisy tracebacks every loop.
+                    if exc.code == 405:
+                        try:
+                            req = urllib.request.Request(login_url, data=b"", method="POST")
+                            with urllib.request.urlopen(req, timeout=10) as resp:
+                                raw = resp.read()
+                                if raw:
+                                    data = json.loads(raw.decode("utf-8"))
+                                    name = data.get("name")
+                                    session = data.get("session")
+                        except Exception:
+                            logger.debug("[OctoPrintEventStream] Passive login unavailable (GET/POST not accepted).")
+                    else:
+                        logger.debug("[OctoPrintEventStream] Passive login failed with HTTP %s.", exc.code)
                 except Exception:
-                    logger.exception("[OctoPrintEventStream] Passive login failed.")
+                    logger.debug("[OctoPrintEventStream] Passive login failed.", exc_info=True)
 
                 ws = websocket.create_connection(self._url, header=headers, timeout=10)
                 logger.info("[OctoPrintEventStream] Connected: %s", self._url)
@@ -95,7 +116,11 @@ class OctoPrintEventStream:
                     except Exception:
                         logger.exception("[OctoPrintEventStream] Failed to send SockJS auth message.")
                 while not self._stop_event.is_set():
-                    raw = ws.recv()
+                    try:
+                        raw = ws.recv()
+                    except websocket.WebSocketTimeoutException:
+                        # No frame received before socket timeout; keep connection open.
+                        continue
                     for message in _decode_sockjs(raw):
                         self._on_message(message)
             except Exception:
