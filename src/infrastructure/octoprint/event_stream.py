@@ -80,11 +80,29 @@ class OctoPrintEventStream:
                             data = json.loads(raw.decode("utf-8"))
                             name = data.get("name")
                             session = data.get("session")
+                except urllib.error.HTTPError as http_err:
+                    # Some OctoPrint setups reject GET for passive login (405).
+                    # Try a POST fallback which some versions expect.
+                    try:
+                        req = urllib.request.Request(login_url, data=b"", method="POST")
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            raw = resp.read()
+                            if raw:
+                                data = json.loads(raw.decode("utf-8"))
+                                name = data.get("name")
+                                session = data.get("session")
+                    except Exception:
+                        logger.exception("[OctoPrintEventStream] Passive login failed (fallback POST).")
                 except Exception:
                     logger.exception("[OctoPrintEventStream] Passive login failed.")
 
                 ws = websocket.create_connection(self._url, header=headers, timeout=10)
                 logger.info("[OctoPrintEventStream] Connected: %s", self._url)
+                # Ensure recv() blocks indefinitely rather than timing out.
+                try:
+                    ws.settimeout(None)
+                except Exception:
+                    pass
                 # If we obtained credentials, send SockJS auth message.
                 if name and session:
                     try:
