@@ -111,6 +111,9 @@ class OctoPrintGateway:
         self._command_listeners: list[callable] = []
         # Recent terminal responses (ts, line, is_error)
         self._recent_terminal: list[tuple[float, str, bool]] = []
+        # One-shot recv listeners for awaiting command responses
+        self._recv_listeners: dict[str, dict] = {}
+        self._recv_lock = threading.Lock()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -196,28 +199,26 @@ class OctoPrintGateway:
         timeout_sec: float = 5.0,
         poll_interval: float = 0.3,
     ) -> GatewayCommandResult:
-        """Send gcode, then poll the terminal until we see a Recv: response line."""
+        """Send gcode and wait for the printer's Recv: response via event stream or REST fallback."""
         started = datetime.utcnow()
         command_id = str(uuid.uuid4())[:8]
         gcode_clean = (gcode or "").strip()
 
-        # Snapshot terminal line count before sending so we can scan for new responses.
-        try:
-            before = self._client.get_terminal(limit=50)
-            before_lines = self._parse_terminal_lines(before)
-            before_count = len(before_lines)
-            logger.debug(
-                "[OctoPrintGateway] Terminal before send: %d lines, last=%r",
-                before_count,
-                before_lines[-1] if before_lines else None,
-            )
-        except Exception:
-            before_lines = []
-            before_count = 0
+        # One-shot event used to wake the waiting thread when a Recv: arrives
+        response_event = threading.Event()
+        result_holder: dict = {}
+
+        def on_recv_line(line: str, is_error: bool) -> None:
+            result_holder["line"] = line
+            result_holder["is_error"] = is_error
+            response_event.set()
+
+        listener_id = self._register_recv_listener(gcode_clean, on_recv_line)
 
         try:
             self._client.send_gcode(gcode_clean)
         except Exception as exc:
+            self._unregister_recv_listener(listener_id)
             elapsed = (datetime.utcnow() - started).total_seconds() * 1000
             return GatewayCommandResult(
                 command_id=command_id,
@@ -227,57 +228,32 @@ class OctoPrintGateway:
                 elapsed_ms=elapsed,
             )
 
-        deadline = time.time() + timeout_sec
-        send_marker = f"send: {gcode_clean.lower()}"
+        got = response_event.wait(timeout=timeout_sec)
+        self._unregister_recv_listener(listener_id)
+        elapsed = (datetime.utcnow() - started).total_seconds() * 1000
 
-        while time.time() < deadline:
-            time.sleep(poll_interval)
-            try:
-                after = self._client.get_terminal(limit=50)
-                all_lines = self._parse_terminal_lines(after)
-            except Exception:
-                continue
-
-            logger.debug(
-                "[OctoPrintGateway] Terminal poll: %d lines total",
-                len(all_lines),
+        if not got:
+            logger.warning(
+                "[OctoPrintGateway] send_gcode_and_wait_response timed out for %r",
+                gcode_clean,
+            )
+            return GatewayCommandResult(
+                command_id=command_id,
+                gcode=gcode_clean,
+                status=GatewayCommandStatus.OK,
+                responses=("timeout: no terminal confirmation",),
+                elapsed_ms=elapsed,
             )
 
-            # Find the most recent Send: echo for this command.
-            send_idx = None
-            for i in range(len(all_lines) - 1, -1, -1):
-                if send_marker in all_lines[i].lower():
-                    send_idx = i
-                    break
-
-            if send_idx is None:
-                continue
-
-            for line in all_lines[send_idx + 1:]:
-                line_lower = line.lower().strip()
-                if not line_lower.startswith("recv:"):
-                    continue
-                is_err = self._is_error_line(line)
-                elapsed = (datetime.utcnow() - started).total_seconds() * 1000
-                return GatewayCommandResult(
-                    command_id=command_id,
-                    gcode=gcode_clean,
-                    status=GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK,
-                    responses=(line.strip(),),
-                    error_message=line.strip() if is_err else None,
-                    elapsed_ms=elapsed,
-                )
-
-        elapsed = (datetime.utcnow() - started).total_seconds() * 1000
-        logger.warning(
-            "[OctoPrintGateway] send_gcode_and_wait_response timed out for %r",
-            gcode_clean,
-        )
+        line = result_holder.get("line")
+        is_err = bool(result_holder.get("is_error"))
+        logger.debug("[OctoPrintGateway] Received response for %r: %r (err=%s)", gcode_clean, line, is_err)
         return GatewayCommandResult(
             command_id=command_id,
             gcode=gcode_clean,
-            status=GatewayCommandStatus.OK,
-            responses=("timeout: no terminal confirmation",),
+            status=GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK,
+            responses=(line.strip() if isinstance(line, str) else str(line),),
+            error_message=(line.strip() if is_err and isinstance(line, str) else None),
             elapsed_ms=elapsed,
         )
 
@@ -494,15 +470,34 @@ class OctoPrintGateway:
 
         self._state.update(**updates)
 
+        # If listeners are waiting for recv lines and websocket isn't delivering,
+        # attempt to fetch recent terminal lines and dispatch them so waiting
+        # senders can be notified when running in REST-polling mode.
+        try:
+            with self._recv_lock:
+                need_dispatch = bool(self._recv_listeners)
+            if need_dispatch:
+                try:
+                    terminal = self._client.get_terminal(limit=20)
+                    lines = self._parse_terminal_lines(terminal)
+                    for line in lines:
+                        try:
+                            self._dispatch_recv_line(line)
+                        except Exception:
+                            logger.exception("[OctoPrintGateway] dispatch_recv_line failed during poll")
+                except Exception:
+                    logger.debug("[OctoPrintGateway] poll: get_terminal failed for dispatch")
+        except Exception:
+            logger.exception("[OctoPrintGateway] recv dispatch check failed")
+
     def _handle_event(self, message: dict) -> None:
         terminal_lines = self._extract_terminal_lines(message)
         if terminal_lines:
-            for line in reversed(terminal_lines):
-                if self._is_ok_line(line) or self._is_error_line(line):
-                    is_error = self._is_error_line(line)
-                    self._record_terminal_response(line, is_error)
-                    self._notify_pending_command(line, is_error)
-                    break
+            for line in terminal_lines:
+                try:
+                    self._dispatch_recv_line(line)
+                except Exception:
+                    logger.exception("[OctoPrintGateway] dispatch_recv_line failed")
         current = message.get("current")
         if isinstance(current, dict):
             self._apply_current_payload(current)
@@ -609,6 +604,59 @@ class OctoPrintGateway:
             return
 
         self._notify_pending_command(joined, True)
+
+    # ------------------------------------------------------------------
+    # Recv-listener registration and dispatch
+    # ------------------------------------------------------------------
+    def _register_recv_listener(self, gcode: str, callback) -> str:
+        lid = str(uuid.uuid4())[:8]
+        entry = {
+            "gcode": (gcode or "").strip().upper(),
+            "callback": callback,
+            "registered_at": time.time(),
+        }
+        with self._recv_lock:
+            self._recv_listeners[lid] = entry
+        return lid
+
+    def _unregister_recv_listener(self, lid: str) -> None:
+        with self._recv_lock:
+            self._recv_listeners.pop(lid, None)
+
+    def _dispatch_recv_line(self, line: str) -> None:
+        """Dispatch an extracted terminal line to pending listeners and record it."""
+        if not isinstance(line, str):
+            return
+        line_text = line.strip()
+        line_lower = line_text.lower()
+
+        # Only care about Recv: lines
+        if not line_lower.startswith("recv:") and not line_lower.startswith("ok"):
+            # still record non-recv lines for pending heuristics
+            is_err = self._is_error_line(line_text)
+            self._record_terminal_response(line_text, is_err)
+            self._notify_pending_command(line_text, is_err)
+            return
+
+        is_err = self._is_error_line(line_text)
+        self._record_terminal_response(line_text, is_err)
+
+        # Fire the oldest waiting listener (commands are sequential)
+        with self._recv_lock:
+            if not self._recv_listeners:
+                return
+            # pick the oldest listener by registered_at
+            oldest = min(self._recv_listeners.items(), key=lambda kv: kv[1].get("registered_at", 0))
+            lid, entry = oldest
+            try:
+                entry["callback"](line_text, is_err)
+            except Exception:
+                logger.exception("[OctoPrintGateway] recv listener raised")
+            # remove it (one-shot)
+            try:
+                self._recv_listeners.pop(lid, None)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Convenience passthroughs to OctoPrintClient
