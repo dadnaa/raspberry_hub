@@ -239,6 +239,17 @@ class OctoPrintGateway:
             try:
                 self._client.send_gcode(gcode_clean)
                 send_ts = time.time()
+                # record the actual send timestamp on the listener so that
+                # history lines recorded after this time can satisfy it.
+                try:
+                    with self._recv_lock:
+                        if listener_id in self._recv_listeners:
+                            self._recv_listeners[listener_id]["send_ts"] = send_ts
+                except Exception:
+                    logger.exception(
+                        "[OctoPrintGateway] failed to record send_ts for listener %s",
+                        listener_id,
+                    )
                 logger.debug(
                     "[OctoPrintGateway] Sent gcode=%r at ts=%f (listener=%s)",
                     gcode_clean,
@@ -554,14 +565,14 @@ class OctoPrintGateway:
                         else:
                             raw = text
                         is_err = self._is_error_line(raw[5:].strip())
-                        self._record_terminal_response(raw, is_err)
+                        self._record_terminal_response(raw, is_err, from_history=True)
 
                 msgs = history.get("messages") or []
                 for msg in msgs:
                     if isinstance(msg, str):
                         raw = f"Recv: {msg.strip()}"
                         is_err = self._is_error_line(msg)
-                        self._record_terminal_response(raw, is_err)
+                        self._record_terminal_response(raw, is_err, from_history=True)
             except Exception:
                 logger.exception("[OctoPrintGateway] recording history terminal lines failed")
 
@@ -605,6 +616,8 @@ class OctoPrintGateway:
             "gcode": (gcode or "").strip().upper(),
             "callback": callback,
             "registered_at": time.time(),
+            # populated after the command is actually sent (send_gcode_and_wait_response)
+            "send_ts": None,
         }
         with self._recv_lock:
             self._recv_listeners[lid] = entry
@@ -643,7 +656,8 @@ class OctoPrintGateway:
             return
 
         is_error = self._is_error_line(content)
-        self._record_terminal_response(line, is_error)
+        # record this live line (but do NOT attempt recorded-history dispatch here)
+        self._record_terminal_response(line, is_error, from_history=False)
 
         now = time.time()
         with self._recv_lock:
@@ -697,7 +711,7 @@ class OctoPrintGateway:
     def _is_ok_line(self, text: str) -> bool:
         return "ok" in text.lower()
 
-    def _record_terminal_response(self, text: str, is_error: bool) -> None:
+    def _record_terminal_response(self, text: str, is_error: bool, from_history: bool = False) -> None:
         now = time.time()
         self._recent_terminal.append((now, text, is_error))
         # Keep a slightly longer window to tolerate small delivery delays
@@ -710,6 +724,47 @@ class OctoPrintGateway:
             is_error,
             len(self._recent_terminal),
         )
+
+        # If this response came from a history snapshot (delivered as part of
+        # a larger `history` frame) then it may satisfy a listener that was
+        # registered just before we sent a command.  To avoid replaying old
+        # lines we only dispatch recorded-history lines to listeners whose
+        # baseline (`send_ts` if available, otherwise `registered_at`) is
+        # older-or-equal to the recorded timestamp.
+        if not from_history:
+            return
+
+        # Normalize content and filter noise.
+        content = text[5:].strip() if isinstance(text, str) and text.lower().startswith("recv:") else str(text).strip()
+        if content.lower() in ("wait", "not sd printing", ""):
+            return
+
+        with self._recv_lock:
+            if not self._recv_listeners:
+                return
+
+            # Serve listeners FIFO — dispatch to the oldest eligible listener
+            # whose baseline (send_ts or registered_at) is <= this recorded ts.
+            candidates = sorted(
+                self._recv_listeners.items(), key=lambda kv: kv[1]["registered_at"]
+            )
+            for lid, entry in candidates:
+                baseline = entry.get("send_ts") or entry.get("registered_at")
+                if now >= baseline:
+                    logger.info(
+                        "[GW] Dispatching recorded terminal %r to listener for gcode=%r (listener=%s)",
+                        content,
+                        entry["gcode"],
+                        lid,
+                    )
+                    try:
+                        entry["callback"](text, is_error)
+                    except Exception:
+                        logger.exception("[GW] recv listener callback raised during recorded dispatch")
+                    finally:
+                        # remove only the dispatched listener
+                        self._recv_listeners.pop(lid, None)
+                    break
 
     def _notify_pending_command(self, text: str, is_error: bool) -> None:
         if not text:
