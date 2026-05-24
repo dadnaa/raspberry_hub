@@ -146,8 +146,23 @@ class OctoPrintEventStream:
                         # Always dispatch the message to the callback
                         self._on_message(message)
 
-            except Exception:
-                if not self._stop_event.is_set():
+            except Exception as exc:
+                if self._stop_event.is_set():
+                    break
+
+                closed_exc_types = []
+                try:
+                    closed_exc_types.append(websocket.WebSocketConnectionClosedException)
+                except Exception:
+                    pass
+
+                if any(isinstance(exc, exc_type) for exc_type in closed_exc_types):
+                    logger.info(
+                        "[OctoPrintEventStream] WebSocket closed; reconnecting in %.2fs",
+                        self._reconnect_sec,
+                    )
+                    self._stop_event.wait(self._reconnect_sec)
+                else:
                     logger.exception("[OctoPrintEventStream] Stream error.")
                     self._stop_event.wait(self._reconnect_sec)
             finally:
