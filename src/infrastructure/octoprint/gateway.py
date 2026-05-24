@@ -486,7 +486,10 @@ class OctoPrintGateway:
         current = message.get("current")
         if isinstance(current, dict):
             try:
-                for line in (current.get("logs") or []):
+                logs = current.get("logs") or []
+                if logs:
+                    logger.debug("[GW] WS logs: %r", logs)
+                for line in logs:
                     if isinstance(line, str):
                         try:
                             self._dispatch_recv_line(line)
@@ -622,6 +625,7 @@ class OctoPrintGateway:
         if not isinstance(line, str):
             return
         line = line.strip()
+        logger.debug("[GW] dispatch candidate: %r listeners=%d", line[:60], len(self._recv_listeners))
         if not line.lower().startswith("recv:"):
             return
 
@@ -631,6 +635,7 @@ class OctoPrintGateway:
         with self._recv_lock:
             if not self._recv_listeners:
                 return
+            logger.debug("[GW] dispatching Recv line to %d listeners", len(self._recv_listeners))
             oldest = min(self._recv_listeners.items(), key=lambda kv: kv[1]["registered_at"])
             lid, entry = oldest
             if now - entry["registered_at"] > 10.0:
