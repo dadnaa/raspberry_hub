@@ -50,23 +50,18 @@ class MQTTBridge:
     """
 
     def __init__(
-        self,
-        command_engine,
-        state_manager,
-        printer_config: PrinterConfig,
-        job_manager:    Optional[JobManager] = None,
-    ) -> None:
-        self._engine  = command_engine
-        self._state   = state_manager
-        self._config  = printer_config
-
-        self._mqtt   = MQTTClient()
-        self._topics = MQTTTopics(self._mqtt.printer_id)
-        self._pub    = MQTTPublisher(self._mqtt, self._topics)
-        self._val    = MessageValidator(self._mqtt.printer_id)
-        self._router = CommandRouter(
-            topics=self._topics,
-            publisher=self._pub,
+        try:
+            if ok and not self._jobs.active_job and self._jobs.queue_length == 0:
+                # Do not override the telemetry-managed printer state here.
+                # The executor's safe-stop behavior decides whether the
+                # device should remain PAUSED or return to IDLE. We only
+                # request a short suppression of telemetry-driven PRINTING
+                # so a safe-stop sequence doesn't immediately flip state.
+                try:
+                    if self._telemetry:
+                        self._telemetry.suppress_printing(2.0)
+                except Exception:
+                    logger.exception("[Bridge] telemetry suppress failed")
             validator=self._val,
             command_engine=command_engine,
         )

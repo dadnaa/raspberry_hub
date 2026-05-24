@@ -57,6 +57,7 @@ class JobExecutor:
         self._cancel_event = threading.Event()
         self._fail_event   = threading.Event()
         self._fail_reason: Optional[str] = None
+        self._preserve_pause: bool = True
         self._thread:      Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -96,13 +97,24 @@ class JobExecutor:
             except Exception:
                 logger.exception("[Executor] Failed to update state_manager on resume")
 
-    def cancel(self) -> None:
+    def cancel(self, preserve_pause: bool = False) -> None:
+        """Request cancellation. By default do not preserve pause so the
+        printer will be resumed and end up IDLE. Set `preserve_pause=True`
+        to keep the printer paused after cancel.
+        """
+        self._preserve_pause = bool(preserve_pause)
         self._cancel_event.set()
         self._pause_event.clear()
         self._fail_event.clear()
         if not self._job.is_terminal:
             self._job.mark_cancelled()
             self._persist_and_publish()
+            try:
+                if self._state_manager:
+                    # Force telemetry to IDLE on cancel to reflect intended state.
+                    self._state_manager.update(status=PrinterStatus.IDLE)
+            except Exception:
+                logger.exception("[Executor] Failed to update state_manager on cancel")
 
     def fail(self, reason: str) -> None:
         self._fail_reason = reason
@@ -216,7 +228,14 @@ class JobExecutor:
         self._fire_finished()
 
     def _safe_stop(self) -> None:
-        for cmd in ("M25", "M104 S0", "M140 S0", "M84"):
+        cmds = []
+        if self._preserve_pause:
+            cmds.append("M25")
+        else:
+            # Ensure printer is resumed so subsequent shutdown leaves it IDLE
+            cmds.append("M24")
+        cmds.extend(("M104 S0", "M140 S0", "M84"))
+        for cmd in cmds:
             try: self._engine.send(cmd)
             except Exception: pass
 
