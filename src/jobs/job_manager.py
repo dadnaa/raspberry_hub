@@ -48,11 +48,13 @@ class JobManager:
         publish_state:  Callable[[JobStateMessage], None],
         printer_id:     str,
         store:          Optional[JobStore] = None,
+        state_manager:  Optional[object] = None,
     ) -> None:
         self._engine      = command_engine
         self._publish     = publish_state
         self._printer_id  = printer_id
         self._store       = store or JobStore()
+        self._state_manager = state_manager
 
         self._lock:     threading.Lock           = threading.Lock()
         self._queue:    Deque[Job]               = deque()
@@ -264,6 +266,7 @@ class JobManager:
             printer_id=self._printer_id,
             on_finished=self._on_job_finished,
             state_listener=self._state_listener,
+            state_manager=self._state_manager,
         )
         self._executor.start()
         logger.info(f"[JobManager] Execution started: {job.job_id}")

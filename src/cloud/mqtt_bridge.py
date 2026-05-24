@@ -71,13 +71,25 @@ class MQTTBridge:
             command_engine=command_engine,
         )
 
-        # JobManager — created here if not injected
-        self._jobs = job_manager or JobManager(
-            command_engine=command_engine,
-            publish_state=self._pub.job_state,
-            printer_id=self._mqtt.printer_id,
-            state_manager=self._state,
-        )
+        # JobManager — created here if not injected. Prefer to pass the
+        # StateManager so executors can update telemetry, but fall back to
+        # constructing without it for older code that lacks the parameter.
+        if job_manager:
+            self._jobs = job_manager
+        else:
+            try:
+                self._jobs = JobManager(
+                    command_engine=command_engine,
+                    publish_state=self._pub.job_state,
+                    printer_id=self._mqtt.printer_id,
+                    state_manager=self._state,
+                )
+            except TypeError:
+                self._jobs = JobManager(
+                    command_engine=command_engine,
+                    publish_state=self._pub.job_state,
+                    printer_id=self._mqtt.printer_id,
+                )
 
         self._stop_event = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
