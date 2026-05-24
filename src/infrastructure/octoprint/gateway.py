@@ -470,37 +470,29 @@ class OctoPrintGateway:
 
         self._state.update(**updates)
 
-        # If listeners are waiting for recv lines and websocket isn't delivering,
-        # attempt to fetch recent terminal lines and dispatch them so waiting
-        # senders can be notified when running in REST-polling mode.
-        try:
-            with self._recv_lock:
-                need_dispatch = bool(self._recv_listeners)
-            if need_dispatch:
-                try:
-                    terminal = self._client.get_terminal(limit=20)
-                    lines = self._parse_terminal_lines(terminal)
-                    for line in lines:
+        # No REST terminal fallback: terminal endpoint is not reliable.
+
+    def _handle_event(self, message: dict) -> None:
+        # Primary path: OctoPrint may include logs in the `current` payload.
+        current = message.get("current")
+        if isinstance(current, dict):
+            try:
+                for line in (current.get("logs") or []):
+                    if isinstance(line, str):
                         try:
                             self._dispatch_recv_line(line)
                         except Exception:
-                            logger.exception("[OctoPrintGateway] dispatch_recv_line failed during poll")
-                except Exception:
-                    logger.debug("[OctoPrintGateway] poll: get_terminal failed for dispatch")
-        except Exception:
-            logger.exception("[OctoPrintGateway] recv dispatch check failed")
-
-    def _handle_event(self, message: dict) -> None:
-        terminal_lines = self._extract_terminal_lines(message)
-        if terminal_lines:
-            for line in terminal_lines:
-                try:
-                    self._dispatch_recv_line(line)
-                except Exception:
-                    logger.exception("[OctoPrintGateway] dispatch_recv_line failed")
-        current = message.get("current")
-        if isinstance(current, dict):
+                            logger.exception("[OctoPrintGateway] dispatch_recv_line failed for current.logs")
+            except Exception:
+                logger.exception("[OctoPrintGateway] Failed processing current.logs")
             self._apply_current_payload(current)
+
+        # Secondary path: walk the full message for other terminal-like shapes
+        for line in self._extract_terminal_lines(message):
+            try:
+                self._dispatch_recv_line(line)
+            except Exception:
+                logger.exception("[OctoPrintGateway] dispatch_recv_line failed for extracted lines")
         # Also scan the raw message for textual printer responses that may
         # indicate command errors (e.g., "Unknown command"). Attempt to
         # correlate these to recently-sent commands.
