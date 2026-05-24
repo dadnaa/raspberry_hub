@@ -86,28 +86,28 @@ class OctoPrintEventStream:
                 except Exception:
                     pass
 
-                if name and session:
-                    # Step 1: auth (SockJS-framed)
-                    try:
-                        _sockjs_send(ws, {"auth": f"{name}:{session}"})
-                        logger.info("[OctoPrintEventStream] Sent auth for user=%r", name)
-                    except Exception:
-                        logger.exception("[OctoPrintEventStream] Failed to send auth message.")
-
-                    # Step 2: throttle — triggers current payload with logs
-                    try:
-                        _sockjs_send(ws, {"throttle": 1})
-                        logger.info("[OctoPrintEventStream] Sent throttle=1")
-                    except Exception:
-                        logger.exception("[OctoPrintEventStream] Failed to send throttle message.")
-                else:
-                    logger.warning(
-                        "[OctoPrintEventStream] No auth credentials — OctoPrint will not push current payloads"
-                    )
-
                 while not self._stop_event.is_set():
                     raw = ws.recv()
                     logger.debug("[OctoPrintEventStream] Raw frame: %r", (raw[:120] if raw else raw))
+
+                    if raw == "o":
+                        if name and session:
+                            try:
+                                _sockjs_send(ws, {"auth": f"{name}:{session}"})
+                                logger.info("[OctoPrintEventStream] Sent auth for user=%r", name)
+                                _sockjs_send(ws, {"throttle": 1})
+                                logger.info("[OctoPrintEventStream] Sent throttle=1")
+                            except Exception:
+                                logger.exception("[OctoPrintEventStream] Failed to send auth/throttle.")
+                        else:
+                            logger.warning(
+                                "[OctoPrintEventStream] No auth credentials — OctoPrint will not push current payloads"
+                            )
+                        continue
+
+                    if raw in ("h", ""):
+                        continue
+
                     for message in _decode_sockjs(raw):
                         self._on_message(message)
             except Exception:
