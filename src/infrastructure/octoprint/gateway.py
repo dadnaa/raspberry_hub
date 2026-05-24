@@ -199,10 +199,60 @@ class OctoPrintGateway:
         timeout_sec: float = 5.0,
         poll_interval: float = 0.3,
     ) -> GatewayCommandResult:
-        """Send gcode and capture the printer Recv: response via a dedicated websocket connection."""
+        """Send gcode and capture the printer Recv: response via the persistent websocket listener."""
         started = datetime.utcnow()
         command_id = str(uuid.uuid4())[:8]
         gcode_clean = (gcode or "").strip()
+        if self._event_stream is not None and self._thread is None:
+            result_holder: dict[str, object] = {}
+            done_event = threading.Event()
+
+            def _on_recv(line: str, is_error: bool) -> None:
+                result_holder["line"] = line
+                result_holder["is_error"] = is_error
+                done_event.set()
+
+            listener_id = self._register_recv_listener(gcode_clean, _on_recv)
+            try:
+                self._client.send_gcode(gcode_clean)
+            except Exception as exc:
+                self._unregister_recv_listener(listener_id)
+                elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+                return GatewayCommandResult(
+                    command_id=command_id,
+                    gcode=gcode_clean,
+                    status=GatewayCommandStatus.FAILED,
+                    error_message=str(exc),
+                    elapsed_ms=elapsed,
+                )
+
+            got_response = done_event.wait(timeout=timeout_sec)
+            self._unregister_recv_listener(listener_id)
+            elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+
+            if got_response:
+                line = str(result_holder.get("line", ""))
+                is_err = bool(result_holder.get("is_error"))
+                logger.info("[OctoPrintGateway] Got response for %r: %r", gcode_clean, line)
+                return GatewayCommandResult(
+                    command_id=command_id,
+                    gcode=gcode_clean,
+                    status=GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK,
+                    responses=(line.strip(),),
+                    error_message=(line.strip() if is_err else None),
+                    elapsed_ms=elapsed,
+                )
+
+            logger.warning("[OctoPrintGateway] send_gcode_and_wait_response timed out for %r", gcode_clean)
+            return GatewayCommandResult(
+                command_id=command_id,
+                gcode=gcode_clean,
+                status=GatewayCommandStatus.FAILED,
+                responses=("timeout: no terminal confirmation",),
+                error_message=f"Timeout: no printer response for '{gcode_clean}'",
+                elapsed_ms=elapsed,
+            )
+
         try:
             import websocket as _websocket_module
         except ImportError:
@@ -234,30 +284,6 @@ class OctoPrintGateway:
                 except Exception:
                     logger.exception("[OctoPrintGateway] Failed to send auth on dedicated ws")
 
-            history_baseline: set[str] = set()
-            baseline_deadline = time.time() + min(1.5, max(0.5, poll_interval * 3.0))
-            while time.time() < baseline_deadline:
-                try:
-                    ws.settimeout(1.0)
-                except Exception:
-                    pass
-                try:
-                    raw = ws.recv()
-                except Exception:
-                    break
-
-                if not raw or raw in ("o", "h"):
-                    continue
-
-                for message in _decode_sockjs_frames(raw):
-                    for key in ("history", "current"):
-                        payload = message.get(key)
-                        if not isinstance(payload, dict):
-                            continue
-                        for line in (payload.get("logs") or []):
-                            if isinstance(line, str):
-                                history_baseline.add(line)
-
             try:
                 self._client.send_gcode(gcode_clean)
             except Exception as exc:
@@ -288,8 +314,6 @@ class OctoPrintGateway:
                         logs = payload.get("logs") or []
                         for line in reversed(logs):
                             if not isinstance(line, str):
-                                continue
-                            if line in history_baseline:
                                 continue
                             if not line.lower().startswith("recv:"):
                                 continue
@@ -715,6 +739,10 @@ class OctoPrintGateway:
         line = line.strip()
         logger.debug("[GW] dispatch candidate: %r listeners=%d", line[:60], len(self._recv_listeners))
         if not line.lower().startswith("recv:"):
+            return
+
+        content = line[5:].strip().lower()
+        if content in ("wait", "not sd printing", ""):
             return
 
         is_error = self._is_error_line(line)
