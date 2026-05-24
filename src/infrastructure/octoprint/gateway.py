@@ -234,6 +234,30 @@ class OctoPrintGateway:
                 except Exception:
                     logger.exception("[OctoPrintGateway] Failed to send auth on dedicated ws")
 
+            history_baseline: set[str] = set()
+            baseline_deadline = time.time() + min(1.5, max(0.5, poll_interval * 3.0))
+            while time.time() < baseline_deadline:
+                try:
+                    ws.settimeout(1.0)
+                except Exception:
+                    pass
+                try:
+                    raw = ws.recv()
+                except Exception:
+                    break
+
+                if not raw or raw in ("o", "h"):
+                    continue
+
+                for message in _decode_sockjs_frames(raw):
+                    for key in ("history", "current"):
+                        payload = message.get(key)
+                        if not isinstance(payload, dict):
+                            continue
+                        for line in (payload.get("logs") or []):
+                            if isinstance(line, str):
+                                history_baseline.add(line)
+
             try:
                 self._client.send_gcode(gcode_clean)
             except Exception as exc:
@@ -264,6 +288,8 @@ class OctoPrintGateway:
                         logs = payload.get("logs") or []
                         for line in reversed(logs):
                             if not isinstance(line, str):
+                                continue
+                            if line in history_baseline:
                                 continue
                             if not line.lower().startswith("recv:"):
                                 continue
