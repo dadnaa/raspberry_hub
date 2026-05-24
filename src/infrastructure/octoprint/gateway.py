@@ -455,28 +455,54 @@ class OctoPrintGateway:
     def _handle_event(self, message: dict) -> None:
         logger.debug("[GW] _handle_event keys=%s", list(message.keys()))
 
-        # Primary path: extract logs from `current` payload and dispatch to
-        # any waiting recv listeners.  The `current` frame is the one
-        # OctoPrint sends in real-time; `history` is the bulk snapshot sent
-        # on connect and is intentionally skipped here to avoid replaying
-        # old "Recv:" lines to freshly-registered listeners.
+        # Primary path: extract terminal lines from the `current` payload and
+        # dispatch to any waiting recv listeners.
+        #
+        # OctoPrint sends two overlapping arrays in each `current` frame:
+        #   - `logs`     — lines prefixed with "Send:" / "Recv:" / "Comm:"
+        #   - `messages` — the bare printer text (no prefix), e.g. "ok", "T:21.3 ..."
+        #
+        # In practice, **real-time** `current` frames only populate `messages`
+        # (logs is empty) while the initial `history` snapshot populates both.
+        # We therefore read both arrays here and synthesise a "Recv:"-prefixed
+        # line from each `messages` entry so that _dispatch_recv_line can
+        # filter noise uniformly.
+        #
+        # `history` is intentionally skipped for dispatch to avoid replaying
+        # old lines into freshly-registered listeners.
         current = message.get("current")
         if isinstance(current, dict):
+            # Collect all terminal lines, preferring the prefixed `logs` array
+            # and falling back to synthesising from `messages`.
+            terminal_lines: list[str] = []
+
             logs = current.get("logs") or []
-            logger.debug(
-                "[GW] current.logs count=%d sample=%r", len(logs), logs[:3]
-            )
+            logger.debug("[GW] current.logs count=%d sample=%r", len(logs), logs[:3])
             for line in logs:
                 if isinstance(line, str):
-                    try:
-                        self._dispatch_recv_line(line)
-                    except Exception:
-                        logger.exception(
-                            "[OctoPrintGateway] dispatch_recv_line failed for %r", line
-                        )
+                    terminal_lines.append(line)
+
+            # Also read `messages` — this is the only place M105 responses
+            # appear in real-time frames (logs is empty for temperature pings).
+            msgs = current.get("messages") or []
+            logger.debug("[GW] current.messages count=%d sample=%r", len(msgs), msgs[:3])
+            for msg in msgs:
+                if isinstance(msg, str):
+                    # Synthesise a "Recv:" prefix so _dispatch_recv_line
+                    # can process it uniformly alongside real log lines.
+                    terminal_lines.append(f"Recv: {msg}")
+
+            for line in terminal_lines:
+                try:
+                    self._dispatch_recv_line(line)
+                except Exception:
+                    logger.exception(
+                        "[OctoPrintGateway] dispatch_recv_line failed for %r", line
+                    )
+
             self._apply_current_payload(current)
 
-        # Apply telemetry from history snapshots too (temperatures, state),
+        # Apply telemetry from history snapshots (temperatures, state),
         # but do NOT dispatch their log lines to recv listeners.
         history = message.get("history")
         if isinstance(history, dict):
