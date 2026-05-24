@@ -18,6 +18,9 @@ from config.settings import JOB_PAUSE_POLL_INTERVAL_SEC
 from src.jobs.job_model  import Job
 from src.jobs.job_store  import JobStore
 from src.core.models     import JobStateMessage
+from typing import Optional
+
+from src.telemetry.printer_state import PrinterStatus
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,7 @@ class JobExecutor:
         printer_id:      str,
         on_finished:     Optional[Callable[[Job], None]] = None,
         state_listener:  Optional[Callable[[Job], None]] = None,
+        state_manager:   Optional[object] = None,
     ) -> None:
         self._job            = job
         self._engine         = command_engine
@@ -47,6 +51,7 @@ class JobExecutor:
         self._printer_id     = printer_id
         self._on_finished    = on_finished
         self._state_listener = state_listener
+        self._state_manager  = state_manager
 
         self._pause_event  = threading.Event()
         self._cancel_event = threading.Event()
@@ -73,12 +78,23 @@ class JobExecutor:
             self._pause_event.set()
             self._job.mark_paused()
             self._persist_and_publish()
+            # Update telemetry state to PAUSED if a StateManager was provided
+            try:
+                if self._state_manager:
+                    self._state_manager.update(status=PrinterStatus.PAUSED)
+            except Exception:
+                logger.exception("[Executor] Failed to update state_manager on pause")
 
     def resume(self) -> None:
         if self._job.status == "PAUSED":
             self._pause_event.clear()
             self._job.mark_printing()
             self._persist_and_publish()
+            try:
+                if self._state_manager:
+                    self._state_manager.update(status=PrinterStatus.PRINTING)
+            except Exception:
+                logger.exception("[Executor] Failed to update state_manager on resume")
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -109,6 +125,11 @@ class JobExecutor:
 
         job.mark_printing()
         self._persist_and_publish()
+        try:
+            if self._state_manager:
+                self._state_manager.update(status=PrinterStatus.PRINTING)
+        except Exception:
+            logger.exception("[Executor] Failed to update state_manager on start")
 
         try:
             while job.current_line_index < job.total_lines:
@@ -168,6 +189,11 @@ class JobExecutor:
         except Exception: pass
         job.mark_paused()
         self._persist_and_publish()
+        try:
+            if self._state_manager:
+                self._state_manager.update(status=PrinterStatus.PAUSED)
+        except Exception:
+            logger.exception("[Executor] Failed to update state_manager in _do_pause")
         while (
             self._pause_event.is_set()
             and not self._cancel_event.is_set()

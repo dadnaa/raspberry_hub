@@ -76,6 +76,7 @@ class MQTTBridge:
             command_engine=command_engine,
             publish_state=self._pub.job_state,
             printer_id=self._mqtt.printer_id,
+            state_manager=self._state,
         )
 
         self._stop_event = threading.Event()
