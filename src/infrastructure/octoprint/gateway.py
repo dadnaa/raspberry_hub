@@ -115,15 +115,15 @@ class OctoPrintGateway:
         self._recv_listeners: dict[str, dict] = {}
         self._recv_lock = threading.Lock()
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
 
-        # If websocket mode is enabled, attempt to use the event stream.
-        # Perform one initial REST poll to prime state, then start the
-        # websocket. If the websocket client is not available, fall back
-        # to the REST poll loop.
         if _websocket_enabled():
             self._event_stream = OctoPrintEventStream(
                 base_url=self._client.base_url,
@@ -144,7 +144,9 @@ class OctoPrintGateway:
                     daemon=True,
                 )
                 self._thread.start()
-                logger.info("[OctoPrintGateway] Websocket unavailable; started REST telemetry polling.")
+                logger.info(
+                    "[OctoPrintGateway] Websocket unavailable; started REST telemetry polling."
+                )
             else:
                 logger.info("[OctoPrintGateway] Started telemetry via websocket.")
             return
@@ -165,6 +167,10 @@ class OctoPrintGateway:
         if self._thread:
             self._thread.join(timeout=self._poll_interval_sec + 2)
         logger.info("[OctoPrintGateway] Stopped.")
+
+    # ------------------------------------------------------------------
+    # G-code sending
+    # ------------------------------------------------------------------
 
     def send(self, gcode: str) -> GatewayCommandResult:
         return self.send_gcode(gcode)
@@ -199,11 +205,25 @@ class OctoPrintGateway:
         timeout_sec: float = 5.0,
         poll_interval: float = 0.3,
     ) -> GatewayCommandResult:
-        """Send gcode and capture the printer Recv: response via the persistent websocket listener."""
+        """Send a G-code command and wait for the printer's terminal response.
+
+        The response is captured from the persistent OctoPrint WebSocket stream
+        (the same connection used for telemetry).  A one-shot listener is
+        registered *before* the command is sent so that the "Recv: ok" (or any
+        other printer reply) that arrives on the main stream is reliably matched
+        back to this call.
+
+        If the persistent stream is not available the call falls back to a
+        fire-and-forget send via send_gcode().
+        """
         started = datetime.utcnow()
         command_id = str(uuid.uuid4())[:8]
         gcode_clean = (gcode or "").strip()
-        if self._event_stream is not None and self._thread is None:
+
+        # ----------------------------------------------------------------
+        # Path A: persistent WebSocket stream is running — use it.
+        # ----------------------------------------------------------------
+        if self._event_stream is not None:
             result_holder: dict[str, object] = {}
             done_event = threading.Event()
 
@@ -212,7 +232,9 @@ class OctoPrintGateway:
                 result_holder["is_error"] = is_error
                 done_event.set()
 
+            # Register the listener BEFORE sending so we cannot miss a fast reply.
             listener_id = self._register_recv_listener(gcode_clean, _on_recv)
+
             try:
                 self._client.send_gcode(gcode_clean)
             except Exception as exc:
@@ -233,7 +255,9 @@ class OctoPrintGateway:
             if got_response:
                 line = str(result_holder.get("line", ""))
                 is_err = bool(result_holder.get("is_error"))
-                logger.info("[OctoPrintGateway] Got response for %r: %r", gcode_clean, line)
+                logger.info(
+                    "[OctoPrintGateway] Got response for %r: %r", gcode_clean, line
+                )
                 return GatewayCommandResult(
                     command_id=command_id,
                     gcode=gcode_clean,
@@ -243,7 +267,11 @@ class OctoPrintGateway:
                     elapsed_ms=elapsed,
                 )
 
-            logger.warning("[OctoPrintGateway] send_gcode_and_wait_response timed out for %r", gcode_clean)
+            # Timed out — no printer reply arrived on the stream within the window.
+            logger.warning(
+                "[OctoPrintGateway] send_gcode_and_wait_response timed out for %r",
+                gcode_clean,
+            )
             return GatewayCommandResult(
                 command_id=command_id,
                 gcode=gcode_clean,
@@ -253,141 +281,33 @@ class OctoPrintGateway:
                 elapsed_ms=elapsed,
             )
 
-        try:
-            import websocket as _websocket_module
-        except ImportError:
-            logger.warning(
-                "[OctoPrintGateway] websocket-client is unavailable; falling back to fire-and-forget send for %r",
-                gcode_clean,
-            )
-            return self.send_gcode(gcode_clean)
-
-        result_holder: dict[str, object] = {}
-        ws = None
-        try:
-            ws_url = _build_websocket_url(self._client.base_url)
-            logger.info("[OctoPrintGateway] Opening dedicated ws for %r: %s", gcode_clean, ws_url)
-            ws = _websocket_module.create_connection(
-                ws_url,
-                header=[f"X-Api-Key: {self._client.api_key}"],
-                timeout=3,
-            )
-            try:
-                ws.settimeout(timeout_sec)
-            except Exception:
-                pass
-
-            name, session = _passive_login_sync(self._client.base_url, self._client.api_key)
-            if name and session:
-                try:
-                    ws.send(json.dumps([json.dumps({"auth": f"{name}:{session}"})]))
-                except Exception:
-                    logger.exception("[OctoPrintGateway] Failed to send auth on dedicated ws")
-
-            try:
-                self._client.send_gcode(gcode_clean)
-            except Exception as exc:
-                elapsed = (datetime.utcnow() - started).total_seconds() * 1000
-                return GatewayCommandResult(
-                    command_id=command_id,
-                    gcode=gcode_clean,
-                    status=GatewayCommandStatus.FAILED,
-                    error_message=str(exc),
-                    elapsed_ms=elapsed,
-                )
-
-            deadline = time.time() + timeout_sec
-            while time.time() < deadline:
-                try:
-                    raw = ws.recv()
-                except Exception:
-                    break
-
-                if not raw or raw in ("o", "h"):
-                    continue
-
-                for message in _decode_sockjs_frames(raw):
-                    for key in ("history", "current"):
-                        payload = message.get(key)
-                        if not isinstance(payload, dict):
-                            continue
-                        logs = payload.get("logs") or []
-                        for line in reversed(logs):
-                            if not isinstance(line, str):
-                                continue
-                            if not line.lower().startswith("recv:"):
-                                continue
-                            stripped = line[5:].strip()
-                            if stripped.lower() in ("wait", "not sd printing"):
-                                continue
-                            is_err = self._is_error_line(line)
-                            result_holder["line"] = line
-                            result_holder["is_error"] = is_err
-                            logger.info(
-                                "[OctoPrintGateway] Got response for %r: %r",
-                                gcode_clean,
-                                line,
-                            )
-                            break
-                        if result_holder:
-                            break
-                    if result_holder:
-                        break
-                if result_holder:
-                    break
-        except Exception as exc:
-            logger.warning("[OctoPrintGateway] Dedicated ws for %r failed: %s", gcode_clean, exc)
-        finally:
-            if ws is not None:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-
-        elapsed = (datetime.utcnow() - started).total_seconds() * 1000
-        if result_holder:
-            line = str(result_holder.get("line", ""))
-            is_err = bool(result_holder.get("is_error"))
-            return GatewayCommandResult(
-                command_id=command_id,
-                gcode=gcode_clean,
-                status=GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK,
-                responses=(line.strip(),),
-                error_message=(line.strip() if is_err else None),
-                elapsed_ms=elapsed,
-            )
-
+        # ----------------------------------------------------------------
+        # Path B: no persistent stream — fire-and-forget.
+        # ----------------------------------------------------------------
         logger.warning(
-            "[OctoPrintGateway] send_gcode_and_wait_response timed out for %r",
+            "[OctoPrintGateway] No persistent WebSocket stream; "
+            "falling back to fire-and-forget send for %r",
             gcode_clean,
         )
-        return GatewayCommandResult(
-            command_id=command_id,
-            gcode=gcode_clean,
-            status=GatewayCommandStatus.FAILED,
-            responses=("timeout: no terminal confirmation",),
-            error_message=f"Timeout: no printer response for '{gcode_clean}'",
-            elapsed_ms=elapsed,
-        )
+        return self.send_gcode(gcode_clean)
+
+    # ------------------------------------------------------------------
+    # Job control
+    # ------------------------------------------------------------------
 
     def pause(self) -> bool:
-        # Ask OctoPrint to pause via REST, then verify via /api/job that the
-        # state moved to paused; otherwise fall back to sending M25.
         try:
             resp = self._client.pause_job()
             logger.debug("[OctoPrintGateway] pause_job response: %r", resp)
-            # store a textual representation for upstream MQTT responders
             try:
-                if isinstance(resp, dict):
-                    # prefer message fields when present
-                    self._last_command_response = json.dumps(resp)
-                else:
-                    self._last_command_response = str(resp)
+                self._last_command_response = (
+                    json.dumps(resp) if isinstance(resp, dict) else str(resp)
+                )
             except Exception:
                 self._last_command_response = str(resp)
         except Exception:
             logger.exception("[OctoPrintGateway] pause_job request failed")
-        # Verify
+
         start = time.time()
         while time.time() - start < OCTOPRINT_JOB_CONTROL_VERIFY_SEC:
             try:
@@ -395,15 +315,21 @@ class OctoPrintGateway:
             except Exception:
                 job = {}
             state = (job.get("state") or "").lower()
-            if state in (s.lower() for s in OCTOPRINT_STATUS_PAUSED) or state in (s.lower() for s in OCTOPRINT_STATUS_PAUSING):
+            if state in (s.lower() for s in OCTOPRINT_STATUS_PAUSED) or state in (
+                s.lower() for s in OCTOPRINT_STATUS_PAUSING
+            ):
                 return True
             time.sleep(0.2)
-        logger.warning("[OctoPrintGateway] pause not observed via telemetry; falling back to M25")
+
+        logger.warning(
+            "[OctoPrintGateway] pause not observed via telemetry; falling back to M25"
+        )
         try:
             res = self.send("M25")
-            # capture response tuple from send
             if getattr(res, "responses", None):
-                self._last_command_response = res.responses[-1] if len(res.responses) else None
+                self._last_command_response = (
+                    res.responses[-1] if res.responses else None
+                )
             return res.succeeded
         except Exception:
             logger.exception("[OctoPrintGateway] fallback M25 failed")
@@ -414,14 +340,14 @@ class OctoPrintGateway:
             resp = self._client.resume_job()
             logger.debug("[OctoPrintGateway] resume_job response: %r", resp)
             try:
-                if isinstance(resp, dict):
-                    self._last_command_response = json.dumps(resp)
-                else:
-                    self._last_command_response = str(resp)
+                self._last_command_response = (
+                    json.dumps(resp) if isinstance(resp, dict) else str(resp)
+                )
             except Exception:
                 self._last_command_response = str(resp)
         except Exception:
             logger.exception("[OctoPrintGateway] resume_job request failed")
+
         start = time.time()
         while time.time() - start < OCTOPRINT_JOB_CONTROL_VERIFY_SEC:
             try:
@@ -432,11 +358,16 @@ class OctoPrintGateway:
             if state in (s.lower() for s in OCTOPRINT_STATUS_PRINTING):
                 return True
             time.sleep(0.2)
-        logger.warning("[OctoPrintGateway] resume not observed via telemetry; falling back to M24")
+
+        logger.warning(
+            "[OctoPrintGateway] resume not observed via telemetry; falling back to M24"
+        )
         try:
             res = self.send("M24")
             if getattr(res, "responses", None):
-                self._last_command_response = res.responses[-1] if len(res.responses) else None
+                self._last_command_response = (
+                    res.responses[-1] if res.responses else None
+                )
             return res.succeeded
         except Exception:
             logger.exception("[OctoPrintGateway] fallback M24 failed")
@@ -450,10 +381,9 @@ class OctoPrintGateway:
             resp = fn()
             logger.debug("[OctoPrintGateway] Job control %s response: %r", name, resp)
             try:
-                if isinstance(resp, dict):
-                    self._last_command_response = json.dumps(resp)
-                else:
-                    self._last_command_response = str(resp)
+                self._last_command_response = (
+                    json.dumps(resp) if isinstance(resp, dict) else str(resp)
+                )
             except Exception:
                 self._last_command_response = str(resp)
             return True
@@ -461,40 +391,9 @@ class OctoPrintGateway:
             logger.exception("[OctoPrintGateway] Job control failed: %s", name)
             return False
 
-    def _notify_pending_command(self, text: str, is_error: bool) -> None:
-        if not text:
-            return
-        now = time.time()
-        window = 5.0
-        candidates = [p for p in self._pending_commands if now - p[1] <= window]
-        if not candidates:
-            return
-        cmd_log_id, ts, gcode = candidates[-1]
-        self._pending_commands = [p for p in self._pending_commands if p[0] != cmd_log_id]
-        for cb in list(self._command_listeners):
-            try:
-                cb(cmd_log_id, text, is_error)
-            except Exception:
-                logger.exception("[OctoPrintGateway] command listener raised")
-
-    def _parse_terminal_lines(self, terminal_response: dict) -> list[str]:
-        """Extract ordered lines from whatever structure get_terminal() returns."""
-        lines: list[str] = []
-        for key in ("logs", "history", "lines", "messages"):
-            entries = terminal_response.get(key)
-            if isinstance(entries, list):
-                for entry in entries:
-                    if isinstance(entry, str):
-                        lines.append(entry)
-                    elif isinstance(entry, dict):
-                        for item_key in ("line", "message", "text"):
-                            text_val = entry.get(item_key)
-                            if isinstance(text_val, str):
-                                lines.append(text_val)
-                                break
-                if lines:
-                    return lines
-        return lines
+    # ------------------------------------------------------------------
+    # Telemetry
+    # ------------------------------------------------------------------
 
     def _poll_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -508,16 +407,18 @@ class OctoPrintGateway:
             job = self._client.get_job()
         except OctoPrintError as e:
             msg = str(e)
-            # OctoPrint may return 409 with a JSON error when the printer
-            # is not operational. Treat that as ERROR but rate-limit warnings
-            # to avoid log spam during extended offline periods.
             if "409" in msg or "not operational" in msg.lower():
                 now = time.time()
                 if now - self._last_nonop_warning >= self._nonop_backoff_sec:
-                    logger.warning("[OctoPrintGateway] Printer not operational: %s", msg)
+                    logger.warning(
+                        "[OctoPrintGateway] Printer not operational: %s", msg
+                    )
                     self._last_nonop_warning = now
                 else:
-                    logger.debug("[OctoPrintGateway] Printer not operational (suppressed warn): %s", msg)
+                    logger.debug(
+                        "[OctoPrintGateway] Printer not operational (suppressed warn): %s",
+                        msg,
+                    )
                 self._state.update(status=PrinterStatus.ERROR)
                 return
             logger.exception("[OctoPrintGateway] Telemetry poll failed.")
@@ -529,9 +430,7 @@ class OctoPrintGateway:
             return
 
         state_text = (
-            printer.get("state", {}).get("text")
-            or job.get("state")
-            or ""
+            printer.get("state", {}).get("text") or job.get("state") or ""
         )
         updates["status"] = _map_status(state_text)
 
@@ -553,46 +452,35 @@ class OctoPrintGateway:
 
         self._state.update(**updates)
 
-        # No REST terminal fallback: terminal endpoint is not reliable.
-
     def _handle_event(self, message: dict) -> None:
-        logger.info("[GW] _handle_event keys=%s", list(message.keys()))
+        logger.debug("[GW] _handle_event keys=%s", list(message.keys()))
 
-        # Primary path: OctoPrint may include logs in the `current` payload.
+        # Primary path: extract logs from `current` payload and dispatch to
+        # any waiting recv listeners.  The `current` frame is the one
+        # OctoPrint sends in real-time; `history` is the bulk snapshot sent
+        # on connect and is intentionally skipped here to avoid replaying
+        # old "Recv:" lines to freshly-registered listeners.
         current = message.get("current")
         if isinstance(current, dict):
-            try:
-                logs = current.get("logs") or []
-                logger.info("[GW] current.logs count=%d sample=%r", len(logs), logs[:5])
-                for line in logs:
-                    if isinstance(line, str):
-                        try:
-                            self._dispatch_recv_line(line)
-                        except Exception:
-                            logger.exception("[OctoPrintGateway] dispatch_recv_line failed for current.logs")
-            except Exception:
-                logger.exception("[OctoPrintGateway] Failed processing current.logs")
+            logs = current.get("logs") or []
+            logger.debug(
+                "[GW] current.logs count=%d sample=%r", len(logs), logs[:3]
+            )
+            for line in logs:
+                if isinstance(line, str):
+                    try:
+                        self._dispatch_recv_line(line)
+                    except Exception:
+                        logger.exception(
+                            "[OctoPrintGateway] dispatch_recv_line failed for %r", line
+                        )
             self._apply_current_payload(current)
 
+        # Apply telemetry from history snapshots too (temperatures, state),
+        # but do NOT dispatch their log lines to recv listeners.
         history = message.get("history")
         if isinstance(history, dict):
             self._apply_current_payload(history)
-
-    def _is_error_line(self, text: str) -> bool:
-        lowered = text.lower()
-        error_indicators = ("unknown command", "unknown gcode", "error", "invalid", "not supported")
-        return any(ind in lowered for ind in error_indicators)
-
-    def _is_ok_line(self, text: str) -> bool:
-        lowered = text.lower()
-        return "ok" in lowered
-
-    def _record_terminal_response(self, text: str, is_error: bool) -> None:
-        now = time.time()
-        self._recent_terminal.append((now, text, is_error))
-        # Keep only a small, recent window to avoid unbounded growth
-        cutoff = now - 5.0
-        self._recent_terminal = [t for t in self._recent_terminal if t[0] >= cutoff]
 
     def _apply_current_payload(self, current: dict) -> None:
         updates = {}
@@ -621,63 +509,12 @@ class OctoPrintGateway:
 
         self._state.update(**updates)
 
-    def register_command_listener(self, callback: callable) -> None:
-        self._command_listeners.append(callback)
-
-    def track_pending_command(self, command_log_id: str, gcode: str) -> None:
-        # record with current monotonic timestamp
-        self._pending_commands.append((command_log_id, time.time(), gcode))
-        # If a terminal response already arrived, resolve immediately.
-        if self._recent_terminal:
-            ts, line, is_error = self._recent_terminal[-1]
-            if time.time() - ts <= 5.0:
-                self._notify_pending_command(line, is_error)
-
-    def _scan_for_printer_texts(self, message: dict) -> None:
-        """Search message dict for textual printer responses and notify listeners.
-
-        This is heuristic: look for substrings that indicate errors and map them
-        to the most recent pending command sent within the last few seconds.
-        """
-        text_fragments: list[str] = []
-
-        def collect_texts(obj):
-            if isinstance(obj, str):
-                text_fragments.append(obj)
-            elif isinstance(obj, dict):
-                for v in obj.values():
-                    collect_texts(v)
-            elif isinstance(obj, list) or isinstance(obj, tuple):
-                for v in obj:
-                    collect_texts(v)
-
-        collect_texts(message)
-        if not text_fragments:
-            return
-
-        # Emit debug logs so we can inspect raw event payload text fragments
-        try:
-            logger.debug("[OctoPrintGateway] collected text fragments: %r", text_fragments)
-        except Exception:
-            pass
-
-        joined = " ".join(text_fragments).lower()
-        try:
-            logger.debug("[OctoPrintGateway] joined event text: %s", joined)
-        except Exception:
-            pass
-        # simple error indicators
-        error_indicators = ("unknown command", "unknown gcode", "error", "invalid", "not supported")
-        is_error = any(ind in joined for ind in error_indicators)
-        if not is_error:
-            return
-
-        self._notify_pending_command(joined, True)
-
     # ------------------------------------------------------------------
     # Recv-listener registration and dispatch
     # ------------------------------------------------------------------
+
     def _register_recv_listener(self, gcode: str, callback) -> str:
+        """Register a one-shot listener that fires on the next meaningful Recv: line."""
         lid = str(uuid.uuid4())[:8]
         entry = {
             "gcode": (gcode or "").strip().upper(),
@@ -693,43 +530,120 @@ class OctoPrintGateway:
             self._recv_listeners.pop(lid, None)
 
     def _dispatch_recv_line(self, line: str) -> None:
-        """Dispatch a recv line to the oldest waiting listener."""
+        """Dispatch a single log line to the oldest waiting recv listener.
+
+        Only lines that start with "Recv:" and carry a meaningful printer
+        response are forwarded.  Noise lines ("wait", "Not SD printing") are
+        silently dropped so they do not prematurely resolve a listener.
+        """
         if not isinstance(line, str):
             return
         line = line.strip()
-        logger.info("[GW] _dispatch_recv_line called: %r", line[:80])
-        logger.debug("[GW] dispatch candidate: %r listeners=%d", line[:60], len(self._recv_listeners))
+        logger.debug("[GW] _dispatch_recv_line: %r", line[:80])
+
+        # Must be a terminal receive line
         if not line.lower().startswith("recv:"):
             return
 
-        content = line[5:].strip().lower()
-        if content in ("wait", "not sd printing", ""):
+        # Strip the "Recv:" prefix and check for noise
+        content = line[5:].strip()
+        if content.lower() in ("wait", "not sd printing", ""):
             return
 
-        is_error = self._is_error_line(line)
+        is_error = self._is_error_line(content)
         self._record_terminal_response(line, is_error)
+
         now = time.time()
         with self._recv_lock:
             if not self._recv_listeners:
                 return
-            logger.debug("[GW] dispatching Recv line to %d listeners", len(self._recv_listeners))
-            oldest = min(self._recv_listeners.items(), key=lambda kv: kv[1]["registered_at"])
-            lid, entry = oldest
-            if now - entry["registered_at"] > 10.0:
-                self._recv_listeners.pop(lid, None)
-                logger.warning("[GW] Dropping stale recv listener for %r", entry["gcode"])
+
+            # Always dispatch to the oldest registered listener so that
+            # concurrent callers are served in FIFO order.
+            oldest_lid, oldest_entry = min(
+                self._recv_listeners.items(),
+                key=lambda kv: kv[1]["registered_at"],
+            )
+
+            # Drop stale listeners (should not happen in normal flow, but
+            # guards against leaked listeners if a thread was interrupted).
+            if now - oldest_entry["registered_at"] > 10.0:
+                self._recv_listeners.pop(oldest_lid, None)
+                logger.warning(
+                    "[GW] Dropped stale recv listener for %r",
+                    oldest_entry["gcode"],
+                )
                 return
+
+            logger.info(
+                "[GW] Dispatching %r to listener for gcode=%r",
+                content,
+                oldest_entry["gcode"],
+            )
             try:
-                entry["callback"](line, is_error)
+                oldest_entry["callback"](line, is_error)
             except Exception:
-                logger.exception("[GW] recv listener raised")
-            self._recv_listeners.pop(lid, None)
+                logger.exception("[GW] recv listener callback raised")
+            finally:
+                self._recv_listeners.pop(oldest_lid, None)
 
     # ------------------------------------------------------------------
-    # Convenience passthroughs to OctoPrintClient
+    # Helpers
     # ------------------------------------------------------------------
+
+    def _is_error_line(self, text: str) -> bool:
+        lowered = text.lower()
+        error_indicators = (
+            "unknown command",
+            "unknown gcode",
+            "error",
+            "invalid",
+            "not supported",
+        )
+        return any(ind in lowered for ind in error_indicators)
+
+    def _is_ok_line(self, text: str) -> bool:
+        return "ok" in text.lower()
+
+    def _record_terminal_response(self, text: str, is_error: bool) -> None:
+        now = time.time()
+        self._recent_terminal.append((now, text, is_error))
+        cutoff = now - 5.0
+        self._recent_terminal = [t for t in self._recent_terminal if t[0] >= cutoff]
+
+    def _notify_pending_command(self, text: str, is_error: bool) -> None:
+        if not text:
+            return
+        now = time.time()
+        window = 5.0
+        candidates = [p for p in self._pending_commands if now - p[1] <= window]
+        if not candidates:
+            return
+        cmd_log_id, ts, gcode = candidates[-1]
+        self._pending_commands = [
+            p for p in self._pending_commands if p[0] != cmd_log_id
+        ]
+        for cb in list(self._command_listeners):
+            try:
+                cb(cmd_log_id, text, is_error)
+            except Exception:
+                logger.exception("[OctoPrintGateway] command listener raised")
+
+    def register_command_listener(self, callback: callable) -> None:
+        self._command_listeners.append(callback)
+
+    def track_pending_command(self, command_log_id: str, gcode: str) -> None:
+        self._pending_commands.append((command_log_id, time.time(), gcode))
+        if self._recent_terminal:
+            ts, line, is_error = self._recent_terminal[-1]
+            if time.time() - ts <= 5.0:
+                self._notify_pending_command(line, is_error)
+
+    # ------------------------------------------------------------------
+    # File management passthroughs
+    # ------------------------------------------------------------------
+
     def upload_file(self, source_url: str, target_name: Optional[str] = None) -> str:
-        """Download and upload a file to OctoPrint local storage via client."""
         try:
             return self._client.upload_file(source_url, target_name)
         except Exception:
@@ -737,25 +651,29 @@ class OctoPrintGateway:
             raise
 
     def print_file(self, filename: str) -> bool:
-        """Select and start printing a file already uploaded to OctoPrint."""
         try:
             self._client.print_file(filename)
             return True
         except Exception as exc:
             msg = str(exc)
-            # If OctoPrint reports that a job is already printing, wait until
-            # it finishes (bounded by OCTOPRINT_PRINT_WAIT_SEC) and retry.
             if "409" in msg or "already printing" in msg.lower():
-                logger.warning("[OctoPrintGateway] print_file conflict for %s: %s — attempting to cancel current job and start new file", filename, msg)
-
-                # Try to cancel the running job first.
+                logger.warning(
+                    "[OctoPrintGateway] print_file conflict for %s: %s — "
+                    "attempting to cancel current job and start new file",
+                    filename,
+                    msg,
+                )
                 try:
                     cancel_resp = self._client.cancel_job()
-                    logger.info("[OctoPrintGateway] cancel_job response: %r", cancel_resp)
+                    logger.info(
+                        "[OctoPrintGateway] cancel_job response: %r", cancel_resp
+                    )
                 except Exception:
-                    logger.exception("[OctoPrintGateway] cancel_job failed; will still attempt to wait for idle state")
+                    logger.exception(
+                        "[OctoPrintGateway] cancel_job failed; "
+                        "will still attempt to wait for idle state"
+                    )
 
-                # Wait until printer is no longer in PRINTING state, up to timeout.
                 wait_start = time.time()
                 while time.time() - wait_start < OCTOPRINT_PRINT_WAIT_SEC:
                     try:
@@ -764,28 +682,36 @@ class OctoPrintGateway:
                         job = {}
                     state = (job.get("state") or "").lower()
                     if state not in (s.lower() for s in OCTOPRINT_STATUS_PRINTING):
-                        # Printer is idle or otherwise not printing; attempt to select and print the file.
                         try:
                             self._client.print_file(filename)
                             return True
                         except Exception as exc2:
-                            logger.warning("[OctoPrintGateway] Retry select/print failed after cancel: %s", exc2)
+                            logger.warning(
+                                "[OctoPrintGateway] Retry select/print failed after cancel: %s",
+                                exc2,
+                            )
                             return False
                     time.sleep(self._poll_interval_sec)
 
-                logger.error("[OctoPrintGateway] print_file timed out waiting for printer to become idle after cancel attempt")
+                logger.error(
+                    "[OctoPrintGateway] print_file timed out waiting for printer "
+                    "to become idle after cancel attempt"
+                )
                 return False
             logger.exception("[OctoPrintGateway] print_file failed.")
             return False
 
     def get_job(self) -> dict:
-        """Return OctoPrint /api/job payload (or empty dict on failure)."""
         try:
             return self._client.get_job()
         except Exception:
             logger.exception("[OctoPrintGateway] get_job failed.")
             return {}
 
+
+# ---------------------------------------------------------------------------
+# Mock gateway for tests / local dev
+# ---------------------------------------------------------------------------
 
 class MockGateway:
     """In-memory gateway for simulator tests and local development."""
@@ -837,24 +763,23 @@ class MockGateway:
         self.cancelled = True
         return True
 
-    # Upload/print API for tests and local dev
     def upload_file(self, source_url: str, target_name: Optional[str] = None) -> str:
-        if target_name:
-            filename = target_name
-        else:
-            filename = source_url.split("/")[-1] or "upload.gcode"
+        filename = target_name or source_url.split("/")[-1] or "upload.gcode"
         self.uploads.append(filename)
         return filename
 
     def print_file(self, filename: str) -> bool:
         self.started = True
-        # reset progress for the file
         self._progress = 0.0
         return True
 
     def get_job(self) -> dict:
         return {"progress": {"completion": self._progress}}
 
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
 
 def _map_status(status_text: str) -> PrinterStatus:
     normalized = status_text.strip().lower()
@@ -875,51 +800,6 @@ def _num(value) -> Optional[float]:
     if value is None:
         return None
     return float(value)
-
-
-def _build_websocket_url(base_url: str) -> str:
-    import random
-    import string
-    from urllib.parse import urlparse, urlunparse
-
-    parsed = urlparse(base_url)
-    scheme = "wss" if parsed.scheme == "https" else "ws"
-    server_id = str(random.randint(0, 999)).zfill(3)
-    session_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    path = f"/sockjs/{server_id}/{session_id}/websocket"
-    return urlunparse((scheme, parsed.netloc, path, "", "", ""))
-
-
-def _passive_login_sync(base_url: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
-    import urllib.parse
-    import urllib.request
-
-    login_url = urllib.parse.urljoin(
-        base_url,
-        f"/api/login?passive=true&apikey={urllib.parse.quote(api_key)}",
-    )
-    try:
-        req = urllib.request.Request(login_url, data=b"", method="POST")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data.get("name"), data.get("session")
-    except Exception:
-        return None, None
-
-
-def _decode_sockjs_frames(raw: str) -> list[dict]:
-    if not raw or raw in ("o", "h"):
-        return []
-    if raw.startswith("a"):
-        try:
-            frames = json.loads(raw[1:])
-            return [json.loads(frame) for frame in frames if isinstance(frame, str)]
-        except Exception:
-            return []
-    try:
-        return [json.loads(raw)]
-    except Exception:
-        return []
 
 
 def _websocket_enabled() -> bool:

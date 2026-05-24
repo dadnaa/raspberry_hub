@@ -91,27 +91,50 @@ class OctoPrintEventStream:
                     logger.debug("[OctoPrintEventStream] Raw frame: %r", raw)
 
                     if raw == "o":
+                        # SockJS open frame — authenticate and subscribe
                         if name and session:
                             try:
                                 _sockjs_send(ws, {"auth": f"{name}:{session}"})
-                                logger.info("[OctoPrintEventStream] Sent auth for user=%r", name)
+                                logger.info(
+                                    "[OctoPrintEventStream] Sent auth for user=%r", name
+                                )
                                 _sockjs_send(ws, {"throttle": 0.25})
                                 logger.info("[OctoPrintEventStream] Sent throttle=0.25")
-                                _sockjs_send(ws, {"subscribe": {"logs": True, "temperatures": True, "current": True}})
-                                logger.info("[OctoPrintEventStream] Sent subscribe logs/temperatures/current")
+                                # Subscribe to logs + temperatures + current state.
+                                # Logs are essential: they carry the printer terminal
+                                # output ("Recv: ok", "Recv: T:…") that
+                                # send_gcode_and_wait_response listens for.
+                                _sockjs_send(
+                                    ws,
+                                    {
+                                        "subscribe": {
+                                            "logs": True,
+                                            "temperatures": True,
+                                            "current": True,
+                                        }
+                                    },
+                                )
+                                logger.info(
+                                    "[OctoPrintEventStream] Sent subscribe logs/temperatures/current"
+                                )
                             except Exception:
-                                logger.exception("[OctoPrintEventStream] Failed to send auth/throttle.")
+                                logger.exception(
+                                    "[OctoPrintEventStream] Failed to send auth/throttle."
+                                )
                         else:
                             logger.warning(
-                                "[OctoPrintEventStream] No auth credentials — OctoPrint will not push current payloads"
+                                "[OctoPrintEventStream] No auth credentials — "
+                                "OctoPrint will not push current payloads"
                             )
                         continue
 
+                    # SockJS heartbeat frame — ignore silently
                     if raw in ("h", ""):
                         continue
 
                     for message in _decode_sockjs(raw):
                         self._on_message(message)
+
             except Exception:
                 if not self._stop_event.is_set():
                     logger.exception("[OctoPrintEventStream] Stream error.")
@@ -126,14 +149,18 @@ class OctoPrintEventStream:
 
 def _websocket_url(base_url: str) -> str:
     server_id = str(random.randint(0, 999)).zfill(3)
-    session_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    session_id = "".join(
+        random.choices(string.ascii_lowercase + string.digits, k=8)
+    )
     parsed = urlparse(base_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     path = f"/sockjs/{server_id}/{session_id}/websocket"
     return urlunparse((scheme, parsed.netloc, path, "", "", ""))
 
 
-def _passive_login(base_url: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
+def _passive_login(
+    base_url: str, api_key: str
+) -> tuple[Optional[str], Optional[str]]:
     login_url = urllib.parse.urljoin(
         base_url,
         f"/api/login?passive=true&apikey={urllib.parse.quote(api_key)}",
@@ -195,4 +222,6 @@ def _sockjs_send(ws, payload: dict) -> None:
         frame = json.dumps([json.dumps(payload)])
         ws.send(frame)
     except Exception:
-        logger.exception("[OctoPrintEventStream] Failed to send SockJS framed message.")
+        logger.exception(
+            "[OctoPrintEventStream] Failed to send SockJS framed message."
+        )
