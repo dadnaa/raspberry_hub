@@ -199,62 +199,124 @@ class OctoPrintGateway:
         timeout_sec: float = 5.0,
         poll_interval: float = 0.3,
     ) -> GatewayCommandResult:
-        """Send gcode and wait for the printer's Recv: response via event stream or REST fallback."""
+        """Send gcode and capture the printer Recv: response via a dedicated websocket connection."""
         started = datetime.utcnow()
         command_id = str(uuid.uuid4())[:8]
         gcode_clean = (gcode or "").strip()
-
-        # One-shot event used to wake the waiting thread when a Recv: arrives
-        response_event = threading.Event()
-        result_holder: dict = {}
-
-        def on_recv_line(line: str, is_error: bool) -> None:
-            result_holder["line"] = line
-            result_holder["is_error"] = is_error
-            response_event.set()
-
-        listener_id = self._register_recv_listener(gcode_clean, on_recv_line)
-
         try:
-            self._client.send_gcode(gcode_clean)
-        except Exception as exc:
-            self._unregister_recv_listener(listener_id)
-            elapsed = (datetime.utcnow() - started).total_seconds() * 1000
-            return GatewayCommandResult(
-                command_id=command_id,
-                gcode=gcode_clean,
-                status=GatewayCommandStatus.FAILED,
-                error_message=str(exc),
-                elapsed_ms=elapsed,
-            )
-
-        got = response_event.wait(timeout=timeout_sec)
-        self._unregister_recv_listener(listener_id)
-        elapsed = (datetime.utcnow() - started).total_seconds() * 1000
-
-        if not got:
+            import websocket as _websocket_module
+        except ImportError:
             logger.warning(
-                "[OctoPrintGateway] send_gcode_and_wait_response timed out for %r",
+                "[OctoPrintGateway] websocket-client is unavailable; falling back to fire-and-forget send for %r",
                 gcode_clean,
             )
+            return self.send_gcode(gcode_clean)
+
+        result_holder: dict[str, object] = {}
+        ws = None
+        try:
+            ws_url = _build_websocket_url(self._client.base_url)
+            logger.info("[OctoPrintGateway] Opening dedicated ws for %r: %s", gcode_clean, ws_url)
+            ws = _websocket_module.create_connection(
+                ws_url,
+                header=[f"X-Api-Key: {self._client.api_key}"],
+                timeout=3,
+            )
+            try:
+                ws.settimeout(timeout_sec)
+            except Exception:
+                pass
+
+            name, session = _passive_login_sync(self._client.base_url, self._client.api_key)
+            if name and session:
+                try:
+                    _sockjs_send(ws, {"auth": f"{name}:{session}"})
+                except Exception:
+                    logger.exception("[OctoPrintGateway] Failed to send auth on dedicated ws")
+
+            try:
+                self._client.send_gcode(gcode_clean)
+            except Exception as exc:
+                elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+                return GatewayCommandResult(
+                    command_id=command_id,
+                    gcode=gcode_clean,
+                    status=GatewayCommandStatus.FAILED,
+                    error_message=str(exc),
+                    elapsed_ms=elapsed,
+                )
+
+            deadline = time.time() + timeout_sec
+            while time.time() < deadline:
+                try:
+                    raw = ws.recv()
+                except Exception:
+                    break
+
+                if not raw or raw in ("o", "h"):
+                    continue
+
+                for message in _decode_sockjs_frames(raw):
+                    for key in ("history", "current"):
+                        payload = message.get(key)
+                        if not isinstance(payload, dict):
+                            continue
+                        logs = payload.get("logs") or []
+                        for line in reversed(logs):
+                            if not isinstance(line, str):
+                                continue
+                            if not line.lower().startswith("recv:"):
+                                continue
+                            stripped = line[5:].strip()
+                            if stripped.lower() in ("wait", "not sd printing"):
+                                continue
+                            is_err = self._is_error_line(line)
+                            result_holder["line"] = line
+                            result_holder["is_error"] = is_err
+                            logger.info(
+                                "[OctoPrintGateway] Got response for %r: %r",
+                                gcode_clean,
+                                line,
+                            )
+                            break
+                        if result_holder:
+                            break
+                    if result_holder:
+                        break
+                if result_holder:
+                    break
+        except Exception as exc:
+            logger.warning("[OctoPrintGateway] Dedicated ws for %r failed: %s", gcode_clean, exc)
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+
+        elapsed = (datetime.utcnow() - started).total_seconds() * 1000
+        if result_holder:
+            line = str(result_holder.get("line", ""))
+            is_err = bool(result_holder.get("is_error"))
             return GatewayCommandResult(
                 command_id=command_id,
                 gcode=gcode_clean,
-                status=GatewayCommandStatus.FAILED,
-                responses=("timeout: no terminal confirmation",),
-                error_message=f"Timeout: no printer response for '{gcode_clean}'",
+                status=GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK,
+                responses=(line.strip(),),
+                error_message=(line.strip() if is_err else None),
                 elapsed_ms=elapsed,
             )
 
-        line = result_holder.get("line")
-        is_err = bool(result_holder.get("is_error"))
-        logger.debug("[OctoPrintGateway] Received response for %r: %r (err=%s)", gcode_clean, line, is_err)
+        logger.warning(
+            "[OctoPrintGateway] send_gcode_and_wait_response timed out for %r",
+            gcode_clean,
+        )
         return GatewayCommandResult(
             command_id=command_id,
             gcode=gcode_clean,
-            status=GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK,
-            responses=(line.strip() if isinstance(line, str) else str(line),),
-            error_message=(line.strip() if is_err and isinstance(line, str) else None),
+            status=GatewayCommandStatus.FAILED,
+            responses=("timeout: no terminal confirmation",),
+            error_message=f"Timeout: no printer response for '{gcode_clean}'",
             elapsed_ms=elapsed,
         )
 
@@ -798,6 +860,51 @@ def _num(value) -> Optional[float]:
     if value is None:
         return None
     return float(value)
+
+
+def _build_websocket_url(base_url: str) -> str:
+    import random
+    import string
+    from urllib.parse import urlparse, urlunparse
+
+    parsed = urlparse(base_url)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    server_id = str(random.randint(0, 999)).zfill(3)
+    session_id = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    path = f"/sockjs/{server_id}/{session_id}/websocket"
+    return urlunparse((scheme, parsed.netloc, path, "", "", ""))
+
+
+def _passive_login_sync(base_url: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
+    import urllib.parse
+    import urllib.request
+
+    login_url = urllib.parse.urljoin(
+        base_url,
+        f"/api/login?passive=true&apikey={urllib.parse.quote(api_key)}",
+    )
+    try:
+        req = urllib.request.Request(login_url, data=b"", method="POST")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("name"), data.get("session")
+    except Exception:
+        return None, None
+
+
+def _decode_sockjs_frames(raw: str) -> list[dict]:
+    if not raw or raw in ("o", "h"):
+        return []
+    if raw.startswith("a"):
+        try:
+            frames = json.loads(raw[1:])
+            return [json.loads(frame) for frame in frames if isinstance(frame, str)]
+        except Exception:
+            return []
+    try:
+        return [json.loads(raw)]
+    except Exception:
+        return []
 
 
 def _websocket_enabled() -> bool:
