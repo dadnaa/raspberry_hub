@@ -117,18 +117,16 @@ class OctoPrintEventStream:
                     pass
 
                 if name and session:
-                    # Step 1: auth
+                    # Step 1: auth (SockJS-framed)
                     try:
-                        auth_msg = json.dumps([json.dumps({"auth": f"{name}:{session}"})])
-                        ws.send(auth_msg)
+                        _sockjs_send(ws, {"auth": f"{name}:{session}"})
                         logger.info("[OctoPrintEventStream] Sent auth for user=%r", name)
                     except Exception:
                         logger.exception("[OctoPrintEventStream] Failed to send auth message.")
 
                     # Step 2: throttle — triggers current payload with logs
                     try:
-                        throttle_msg = json.dumps([json.dumps({"throttle": 1})])
-                        ws.send(throttle_msg)
+                        _sockjs_send(ws, {"throttle": 1})
                         logger.info("[OctoPrintEventStream] Sent throttle=1")
                     except Exception:
                         logger.exception("[OctoPrintEventStream] Failed to send throttle message.")
@@ -179,3 +177,22 @@ def _decode_sockjs(raw: str) -> list[dict]:
         return [json.loads(raw)]
     except json.JSONDecodeError:
         return []
+
+
+def _sockjs_frame(payload: dict) -> str:
+    """Return a SockJS-framed string for sending: a["{...}"]
+
+    SockJS message frames are prefixed with a single-letter channel
+    indicator. For typical application frames we use 'a' followed by a
+    JSON array containing the stringified JSON payload.
+    """
+    inner = json.dumps(payload)
+    return "a" + json.dumps([inner])
+
+
+def _sockjs_send(ws, payload: dict) -> None:
+    try:
+        frame = _sockjs_frame(payload)
+        ws.send(frame)
+    except Exception:
+        logger.exception("[OctoPrintEventStream] Failed to send SockJS framed message.")
