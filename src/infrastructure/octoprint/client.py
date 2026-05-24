@@ -55,7 +55,16 @@ class OctoPrintClient:
     def get_terminal(self, limit: int = 10) -> dict[str, Any]:
         # OctoPrint terminal endpoint returns recent terminal lines.
         # Use a small limit to keep payloads light.
-        return self._request("GET", f"/api/printer/terminal?limit={int(limit)}")
+        result = self._request("GET", f"/api/printer/terminal?limit={int(limit)}")
+        try:
+            logger.debug(
+                "[OctoPrintClient] get_terminal keys=%s sample=%r",
+                list(result.keys()) if isinstance(result, dict) else [],
+                str(result)[:200],
+            )
+        except Exception:
+            pass
+        return result
 
     def pause_job(self) -> None:
         resp = self._request("POST", "/api/job", {"command": "pause", "action": "pause"})
