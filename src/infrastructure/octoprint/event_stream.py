@@ -69,8 +69,11 @@ class OctoPrintEventStream:
         while not self._stop_event.is_set():
             ws = None
             try:
-                # First perform passive login to obtain SockJS session credentials.
-                login_url = urllib.parse.urljoin(self._base_url, f"/api/login?passive=true&apikey={urllib.parse.quote(self._api_key)}")
+                # Passive login
+                login_url = urllib.parse.urljoin(
+                    self._base_url,
+                    f"/api/login?passive=true&apikey={urllib.parse.quote(self._api_key)}",
+                )
                 name = None
                 session = None
                 try:
@@ -80,9 +83,13 @@ class OctoPrintEventStream:
                             data = json.loads(raw.decode("utf-8"))
                             name = data.get("name")
                             session = data.get("session")
+                            logger.info(
+                                "[OctoPrintEventStream] Passive login: name=%r session=%r",
+                                name,
+                                (session[:8] + "...") if session else None,
+                            )
                 except urllib.error.HTTPError as http_err:
-                    # Some OctoPrint setups reject GET for passive login (405).
-                    # Try a POST fallback which some versions expect.
+                    # Try POST fallback if GET returns 405
                     try:
                         req = urllib.request.Request(login_url, data=b"", method="POST")
                         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -91,6 +98,11 @@ class OctoPrintEventStream:
                                 data = json.loads(raw.decode("utf-8"))
                                 name = data.get("name")
                                 session = data.get("session")
+                                logger.info(
+                                    "[OctoPrintEventStream] Passive login (POST): name=%r session=%r",
+                                    name,
+                                    (session[:8] + "...") if session else None,
+                                )
                     except Exception:
                         logger.exception("[OctoPrintEventStream] Passive login failed (fallback POST).")
                 except Exception:
@@ -103,21 +115,31 @@ class OctoPrintEventStream:
                     ws.settimeout(None)
                 except Exception:
                     pass
-                # If we obtained credentials, send SockJS auth message.
+
                 if name and session:
+                    # Step 1: auth
                     try:
-                        auth_obj = {"auth": f"{name}:{session}"}
-                        # SockJS expects an array of stringified messages.
-                        msg = json.dumps([json.dumps(auth_obj)])
-                        ws.send(msg)
-                        # Request throttle so OctoPrint includes logs/messages in `current`.
-                        throttle_obj = {"throttle": 1}
-                        throttle_msg = json.dumps([json.dumps(throttle_obj)])
-                        ws.send(throttle_msg)
+                        auth_msg = json.dumps([json.dumps({"auth": f"{name}:{session}"})])
+                        ws.send(auth_msg)
+                        logger.info("[OctoPrintEventStream] Sent auth for user=%r", name)
                     except Exception:
-                        logger.exception("[OctoPrintEventStream] Failed to send SockJS auth/throttle message.")
+                        logger.exception("[OctoPrintEventStream] Failed to send auth message.")
+
+                    # Step 2: throttle — triggers current payload with logs
+                    try:
+                        throttle_msg = json.dumps([json.dumps({"throttle": 1})])
+                        ws.send(throttle_msg)
+                        logger.info("[OctoPrintEventStream] Sent throttle=1")
+                    except Exception:
+                        logger.exception("[OctoPrintEventStream] Failed to send throttle message.")
+                else:
+                    logger.warning(
+                        "[OctoPrintEventStream] No auth credentials — OctoPrint will not push current payloads"
+                    )
+
                 while not self._stop_event.is_set():
                     raw = ws.recv()
+                    logger.debug("[OctoPrintEventStream] Raw frame: %r", (raw[:120] if raw else raw))
                     for message in _decode_sockjs(raw):
                         self._on_message(message)
             except Exception:
