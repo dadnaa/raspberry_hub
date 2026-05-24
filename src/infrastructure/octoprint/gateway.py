@@ -235,8 +235,10 @@ class OctoPrintGateway:
             # Register the listener BEFORE sending so we cannot miss a fast reply.
             listener_id = self._register_recv_listener(gcode_clean, _on_recv)
 
+            send_ts = None
             try:
                 self._client.send_gcode(gcode_clean)
+                send_ts = time.time()
             except Exception as exc:
                 self._unregister_recv_listener(listener_id)
                 elapsed = (datetime.utcnow() - started).total_seconds() * 1000
@@ -266,6 +268,31 @@ class OctoPrintGateway:
                     error_message=(line.strip() if is_err else None),
                     elapsed_ms=elapsed,
                 )
+
+            # Timed out waiting for a direct response. As a fallback, check
+            # recently-recorded terminal lines (history/current) for any
+            # responses that arrived after we sent the command.
+            if not got_response and send_ts is not None:
+                try:
+                    with self._recv_lock:
+                        for ts, line, is_err in reversed(self._recent_terminal):
+                            if ts >= send_ts:
+                                logger.info(
+                                    "[OctoPrintGateway] Found recent terminal line after send: %r",
+                                    line,
+                                )
+                                return GatewayCommandResult(
+                                    command_id=command_id,
+                                    gcode=gcode_clean,
+                                    status=(GatewayCommandStatus.FAILED if is_err else GatewayCommandStatus.OK),
+                                    responses=(line.strip(),),
+                                    error_message=(line.strip() if is_err else None),
+                                    elapsed_ms=elapsed,
+                                )
+                except Exception:
+                    logger.exception(
+                        "[OctoPrintGateway] recent terminal lookup failed after timeout"
+                    )
 
             # Timed out — no printer reply arrived on the stream within the window.
             logger.warning(
@@ -506,6 +533,32 @@ class OctoPrintGateway:
         # but do NOT dispatch their log lines to recv listeners.
         history = message.get("history")
         if isinstance(history, dict):
+            # Record terminal responses from history snapshot so recently-arrived
+            # lines (delivered as part of history) can satisfy waiting callers.
+            # We intentionally do NOT dispatch these to recv-listeners; they
+            # only populate `_recent_terminal` for lookups.
+            try:
+                logs = history.get("logs") or []
+                for line in logs:
+                    if isinstance(line, str):
+                        text = line.strip()
+                        # normalize to a Recv: prefixed form
+                        if not text.lower().startswith("recv:"):
+                            raw = f"Recv: {text}"
+                        else:
+                            raw = text
+                        is_err = self._is_error_line(raw[5:].strip())
+                        self._record_terminal_response(raw, is_err)
+
+                msgs = history.get("messages") or []
+                for msg in msgs:
+                    if isinstance(msg, str):
+                        raw = f"Recv: {msg.strip()}"
+                        is_err = self._is_error_line(msg)
+                        self._record_terminal_response(raw, is_err)
+            except Exception:
+                logger.exception("[OctoPrintGateway] recording history terminal lines failed")
+
             self._apply_current_payload(history)
 
     def _apply_current_payload(self, current: dict) -> None:
