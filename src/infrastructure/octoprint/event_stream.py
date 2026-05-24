@@ -190,7 +190,7 @@ def _sockjs_frame(payload: dict) -> str:
 
 def _sockjs_send(ws, payload: dict) -> None:
     try:
-        frame = _sockjs_frame(payload)
+        frame = json.dumps([json.dumps(payload)])
         ws.send(frame)
     except Exception:
         logger.exception("[OctoPrintEventStream] Failed to send SockJS framed message.")
