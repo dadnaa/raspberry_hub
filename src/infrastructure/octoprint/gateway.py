@@ -618,39 +618,30 @@ class OctoPrintGateway:
             self._recv_listeners.pop(lid, None)
 
     def _dispatch_recv_line(self, line: str) -> None:
-        """Dispatch an extracted terminal line to pending listeners and record it."""
+        """Dispatch a recv line to the oldest waiting listener."""
         if not isinstance(line, str):
             return
-        line_text = line.strip()
-        line_lower = line_text.lower()
-
-        # Only care about Recv: lines
-        if not line_lower.startswith("recv:") and not line_lower.startswith("ok"):
-            # still record non-recv lines for pending heuristics
-            is_err = self._is_error_line(line_text)
-            self._record_terminal_response(line_text, is_err)
-            self._notify_pending_command(line_text, is_err)
+        line = line.strip()
+        if not line.lower().startswith("recv:"):
             return
 
-        is_err = self._is_error_line(line_text)
-        self._record_terminal_response(line_text, is_err)
-
-        # Fire the oldest waiting listener (commands are sequential)
+        is_error = self._is_error_line(line)
+        self._record_terminal_response(line, is_error)
+        now = time.time()
         with self._recv_lock:
             if not self._recv_listeners:
                 return
-            # pick the oldest listener by registered_at
-            oldest = min(self._recv_listeners.items(), key=lambda kv: kv[1].get("registered_at", 0))
+            oldest = min(self._recv_listeners.items(), key=lambda kv: kv[1]["registered_at"])
             lid, entry = oldest
-            try:
-                entry["callback"](line_text, is_err)
-            except Exception:
-                logger.exception("[OctoPrintGateway] recv listener raised")
-            # remove it (one-shot)
-            try:
+            if now - entry["registered_at"] > 10.0:
                 self._recv_listeners.pop(lid, None)
+                logger.warning("[GW] Dropping stale recv listener for %r", entry["gcode"])
+                return
+            try:
+                entry["callback"](line, is_error)
             except Exception:
-                pass
+                logger.exception("[GW] recv listener raised")
+            self._recv_listeners.pop(lid, None)
 
     # ------------------------------------------------------------------
     # Convenience passthroughs to OctoPrintClient

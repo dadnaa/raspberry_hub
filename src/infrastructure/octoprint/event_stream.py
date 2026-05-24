@@ -69,7 +69,7 @@ class OctoPrintEventStream:
         while not self._stop_event.is_set():
             ws = None
             try:
-                # Passive login
+                # Passive login must use POST on OctoPrint 1.5+
                 login_url = urllib.parse.urljoin(
                     self._base_url,
                     f"/api/login?passive=true&apikey={urllib.parse.quote(self._api_key)}",
@@ -77,34 +77,18 @@ class OctoPrintEventStream:
                 name = None
                 session = None
                 try:
-                    with urllib.request.urlopen(login_url, timeout=10) as resp:
+                    req = urllib.request.Request(login_url, data=b"", method="POST")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
                         raw = resp.read()
                         if raw:
                             data = json.loads(raw.decode("utf-8"))
                             name = data.get("name")
                             session = data.get("session")
                             logger.info(
-                                "[OctoPrintEventStream] Passive login: name=%r session=%r",
+                                "[OctoPrintEventStream] Passive login (POST): name=%r session=%r",
                                 name,
                                 (session[:8] + "...") if session else None,
                             )
-                except urllib.error.HTTPError as http_err:
-                    # Try POST fallback if GET returns 405
-                    try:
-                        req = urllib.request.Request(login_url, data=b"", method="POST")
-                        with urllib.request.urlopen(req, timeout=10) as resp:
-                            raw = resp.read()
-                            if raw:
-                                data = json.loads(raw.decode("utf-8"))
-                                name = data.get("name")
-                                session = data.get("session")
-                                logger.info(
-                                    "[OctoPrintEventStream] Passive login (POST): name=%r session=%r",
-                                    name,
-                                    (session[:8] + "...") if session else None,
-                                )
-                    except Exception:
-                        logger.exception("[OctoPrintEventStream] Passive login failed (fallback POST).")
                 except Exception:
                     logger.exception("[OctoPrintEventStream] Passive login failed.")
 
