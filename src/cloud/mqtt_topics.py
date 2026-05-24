@@ -2,7 +2,7 @@
 mqtt_topics.py — Sprint 5 Updated Topic Contract
 
 Upstream   (Pi → Cloud): handshake, printer-state, job-state, command-state
-Downstream (Cloud → Pi): command, start-job, pause-job, resume-job, stop-job
+Downstream (Cloud → Pi): command, start-job, pause-job, resume-job, cancel-job
 """
 
 
@@ -48,7 +48,7 @@ class MQTTTopics:
 
     @property
     def stop_job(self) -> str:
-        return f"printers/{self._id}/stop-job"
+        return f"printers/{self._id}/cancel-job"
 
     # ── Helpers ───────────────────────────────────────────────────────
 

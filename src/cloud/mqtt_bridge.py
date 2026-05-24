@@ -2,7 +2,7 @@
 mqtt_bridge.py — Sprint 5 Updated MQTT Bridge
 
 Extends Sprint 4 bridge with:
-  - Job control dispatch: start-job, pause-job, resume-job, stop-job
+    - Job control dispatch: start-job, pause-job, resume-job, cancel-job
   - JobManager integration
   - Startup recovery via JobManager.recover()
 """
@@ -191,9 +191,9 @@ class MQTTBridge:
         try:
             msg = StopJobMessage.from_json(payload)
         except Exception as exc:
-            logger.warning(f"[Bridge] Invalid stop-job: {exc}")
+            logger.warning(f"[Bridge] Invalid cancel-job: {exc}")
             return
-        if not self._is_for_this_printer(msg, "stop-job"):
+        if not self._is_for_this_printer(msg, "cancel-job"):
             return
         ok = self._jobs.cancel(msg.jobId)
         logger.info(f"[Bridge] cancel({msg.jobId}) -> {'ok' if ok else 'not found'}")

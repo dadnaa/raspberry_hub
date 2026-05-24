@@ -2,8 +2,8 @@
 core/models.py — Sprint 5: Updated shared dataclasses.
 
 Adds:
-  - JobStatus extended with LOADING
-  - New MQTT downstream topics: pause-job, resume-job, stop-job
+    - JobStatus extended with LOADING
+    - New MQTT downstream topics: pause-job, resume-job, cancel-job
   - PauseJobMessage, ResumeJobMessage, StopJobMessage
   - JobStateMessage gets to_json() for consistency
 """
@@ -165,7 +165,7 @@ class ResumeJobMessage:
 
 @dataclass
 class StopJobMessage:
-    """Mapped to MQTT: printers/{id}/stop-job"""
+    """Mapped to MQTT: printers/{id}/cancel-job"""
     printerId: str
     jobId:     str
     reason:    Optional[str] = None
