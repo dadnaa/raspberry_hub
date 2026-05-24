@@ -239,6 +239,12 @@ class OctoPrintGateway:
             try:
                 self._client.send_gcode(gcode_clean)
                 send_ts = time.time()
+                logger.debug(
+                    "[OctoPrintGateway] Sent gcode=%r at ts=%f (listener=%s)",
+                    gcode_clean,
+                    send_ts,
+                    listener_id,
+                )
             except Exception as exc:
                 self._unregister_recv_listener(listener_id)
                 elapsed = (datetime.utcnow() - started).total_seconds() * 1000
@@ -602,11 +608,18 @@ class OctoPrintGateway:
         }
         with self._recv_lock:
             self._recv_listeners[lid] = entry
+        logger.debug(
+            "[GW] Registered recv listener %s for gcode=%r at %f",
+            lid,
+            entry["gcode"],
+            entry["registered_at"],
+        )
         return lid
 
     def _unregister_recv_listener(self, lid: str) -> None:
         with self._recv_lock:
             self._recv_listeners.pop(lid, None)
+        logger.debug("[GW] Unregistered recv listener %s", lid)
 
     def _dispatch_recv_line(self, line: str) -> None:
         """Dispatch a single log line to the oldest waiting recv listener.
@@ -687,8 +700,16 @@ class OctoPrintGateway:
     def _record_terminal_response(self, text: str, is_error: bool) -> None:
         now = time.time()
         self._recent_terminal.append((now, text, is_error))
-        cutoff = now - 5.0
+        # Keep a slightly longer window to tolerate small delivery delays
+        cutoff = now - 10.0
         self._recent_terminal = [t for t in self._recent_terminal if t[0] >= cutoff]
+        logger.debug(
+            "[GW] Recorded terminal response ts=%f text=%r is_error=%s recent_count=%d",
+            now,
+            text,
+            is_error,
+            len(self._recent_terminal),
+        )
 
     def _notify_pending_command(self, text: str, is_error: bool) -> None:
         if not text:
