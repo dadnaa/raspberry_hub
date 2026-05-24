@@ -240,8 +240,9 @@ class OctoPrintGateway:
             return GatewayCommandResult(
                 command_id=command_id,
                 gcode=gcode_clean,
-                status=GatewayCommandStatus.OK,
+                status=GatewayCommandStatus.FAILED,
                 responses=("timeout: no terminal confirmation",),
+                error_message=f"Timeout: no printer response for '{gcode_clean}'",
                 elapsed_ms=elapsed,
             )
 

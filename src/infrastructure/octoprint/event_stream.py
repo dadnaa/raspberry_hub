@@ -95,8 +95,8 @@ class OctoPrintEventStream:
                             try:
                                 _sockjs_send(ws, {"auth": f"{name}:{session}"})
                                 logger.info("[OctoPrintEventStream] Sent auth for user=%r", name)
-                                _sockjs_send(ws, {"throttle": 1})
-                                logger.info("[OctoPrintEventStream] Sent throttle=1")
+                                _sockjs_send(ws, {"throttle": 0.25})
+                                logger.info("[OctoPrintEventStream] Sent throttle=0.25")
                             except Exception:
                                 logger.exception("[OctoPrintEventStream] Failed to send auth/throttle.")
                         else:
