@@ -325,14 +325,16 @@ class TelemetryEngine:
         # Pause / resume
         # ----------------------------------------------------------------
         if parser.is_paused(line):
-            updates["status"] = PrinterStatus.PAUSED
-            logger.info("[Telemetry] Printer paused.")
+            import time as _time
+            if _time.time() >= self._suppress_printing_until:
+                updates["status"] = PrinterStatus.PAUSED
+                logger.info("[Telemetry] Printer paused.")
 
         if parser.is_resumed(line):
             import time as _time
             if _time.time() >= self._suppress_printing_until:
                 updates["status"] = PrinterStatus.PRINTING
-            logger.info("[Telemetry] Printer resumed.")
+                logger.info("[Telemetry] Printer resumed.")
 
         if updates:
             self._state.update(**updates)

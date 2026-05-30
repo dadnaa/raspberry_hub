@@ -18,7 +18,6 @@ from config.settings import JOB_PAUSE_POLL_INTERVAL_SEC
 from src.jobs.job_model  import Job
 from src.jobs.job_store  import JobStore
 from src.core.models     import JobStateMessage
-from typing import Optional
 
 from src.telemetry.printer_state import PrinterStatus
 
@@ -62,6 +61,28 @@ class JobExecutor:
         self._preserve_pause: bool = True
         self._thread:      Optional[threading.Thread] = None
 
+    def _sync_printer_state_from_job(self) -> None:
+        """Keep printer status consistent with the current job status."""
+        if not self._state_manager:
+            return
+
+        mapping = {
+            "PRINTING": PrinterStatus.PRINTING,
+            "PAUSED": PrinterStatus.PAUSED,
+            "CANCELLED": PrinterStatus.IDLE,
+            "FAILED": PrinterStatus.IDLE,
+            "COMPLETED": PrinterStatus.IDLE,
+            "DONE": PrinterStatus.IDLE,
+        }
+        target = mapping.get(self._job.status)
+        if target is None:
+            return
+
+        try:
+            self._state_manager.update(status=target)
+        except Exception:
+            logger.exception("[Executor] Failed to sync state_manager from job status")
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
@@ -81,23 +102,12 @@ class JobExecutor:
             self._pause_event.set()
             self._job.mark_paused()
             self._persist_and_publish()
-            # Update telemetry state to PAUSED if a StateManager was provided
-            try:
-                if self._state_manager:
-                    self._state_manager.update(status=PrinterStatus.PAUSED)
-            except Exception:
-                logger.exception("[Executor] Failed to update state_manager on pause")
 
     def resume(self) -> None:
         if self._job.status == "PAUSED":
             self._pause_event.clear()
             self._job.mark_printing()
             self._persist_and_publish()
-            try:
-                if self._state_manager:
-                    self._state_manager.update(status=PrinterStatus.PRINTING)
-            except Exception:
-                logger.exception("[Executor] Failed to update state_manager on resume")
 
     def cancel(self, preserve_pause: bool = False) -> None:
         """Request cancellation. By default do not preserve pause so the
@@ -111,12 +121,6 @@ class JobExecutor:
         if not self._job.is_terminal:
             self._job.mark_cancelled()
             self._persist_and_publish()
-            try:
-                if self._state_manager:
-                    # Force telemetry to IDLE on cancel to reflect intended state.
-                    self._state_manager.update(status=PrinterStatus.IDLE)
-            except Exception:
-                logger.exception("[Executor] Failed to update state_manager on cancel")
             try:
                 if self._telemetry_engine:
                     self._telemetry_engine.suppress_printing(2.0)
@@ -144,11 +148,6 @@ class JobExecutor:
 
         job.mark_printing()
         self._persist_and_publish()
-        try:
-            if self._state_manager:
-                self._state_manager.update(status=PrinterStatus.PRINTING)
-        except Exception:
-            logger.exception("[Executor] Failed to update state_manager on start")
 
         try:
             while job.current_line_index < job.total_lines:
@@ -208,11 +207,6 @@ class JobExecutor:
         except Exception: pass
         job.mark_paused()
         self._persist_and_publish()
-        try:
-            if self._state_manager:
-                self._state_manager.update(status=PrinterStatus.PAUSED)
-        except Exception:
-            logger.exception("[Executor] Failed to update state_manager in _do_pause")
         while (
             self._pause_event.is_set()
             and not self._cancel_event.is_set()
@@ -250,6 +244,8 @@ class JobExecutor:
         job = self._job
         try: self._store.save(job)
         except Exception: logger.exception("[Executor] Persist failed.")
+
+        self._sync_printer_state_from_job()
 
         msg = JobStateMessage(
             jobId=job.job_id, printerId=self._printer_id,
