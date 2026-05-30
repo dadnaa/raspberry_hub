@@ -268,11 +268,25 @@ class MQTTBridge:
             PrinterStatus.REBOOTING: "OFFLINE",
             PrinterStatus.UNKNOWN:   "OFFLINE",
         }
+        status = status_map.get(snapshot.status, "OFFLINE")
+
+        # Keep printer-state aligned with active job lifecycle.
+        # Telemetry can briefly report PRINTING/PAUSED during cancel safe-stop,
+        # so clamp those states when no active print lifecycle exists.
+        active = self._jobs.active_job
+        if active is None or active.status in ("CANCELLED", "FAILED", "COMPLETED", "DONE"):
+            if status in ("PRINTING", "PAUSED"):
+                status = "IDLE"
+        elif active.status == "PAUSED":
+            status = "PAUSED"
+        elif active.status in ("QUEUED", "LOADING", "PRINTING"):
+            status = "PRINTING"
+
         msg = PrinterStateMessage(
             printerId=self._mqtt.printer_id,
             name=self._config.name,
             model=self._config.model,
-            status=status_map.get(snapshot.status, "OFFLINE"),
+            status=status,
             nozzleDiameter=self._config.nozzle_diameter,
             nozzleTemp=snapshot.nozzle_temp or 0.0,
             bedTemp=snapshot.bed_temp or 0.0,
